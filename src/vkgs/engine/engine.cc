@@ -620,6 +620,8 @@ class Engine::Impl {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   }
 
   ~Impl() {
@@ -656,8 +658,8 @@ class Engine::Impl {
 
   void Run() {
     // create window
-    width_ = 1600;
-    height_ = 900;
+    width_ = 1920;
+    height_ = 1080;
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     window_ = glfwCreateWindow(width_, height_, "vkgs", NULL, NULL);
@@ -923,6 +925,21 @@ class Engine::Impl {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
+        if (ImGui::BeginMainMenuBar()) {
+          if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Create")) {
+            }
+            if (ImGui::MenuItem("Open", "Ctrl+O")) {
+            }
+            if (ImGui::MenuItem("Save", "Ctrl+S")) {
+            }
+            if (ImGui::MenuItem("Save as..")) {
+            }
+            ImGui::EndMenu();
+          }
+          ImGui::EndMainMenuBar();
+        }
+
         const auto& io = ImGui::GetIO();
 
         // handle events
@@ -1142,8 +1159,19 @@ class Engine::Impl {
           }
           ImGui::PopID();
         }
+        if (ImGui::Begin("viewport")) {
+          ImGui::End();
+        }
+
         ImGui::End();
         ImGui::Render();
+
+        // // Update and Render additional Platform Windows
+        // if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        //   ImGui::UpdatePlatformWindows();
+        //   ImGui::RenderPlatformWindowsDefault();
+        //   // TODO for OpenGL: restore current GL context.
+        // }
       }
 
       model = ToScaleMatrix4(scale_ * scale) * glm::toMat4(gq) *

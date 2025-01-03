@@ -767,39 +767,44 @@ class Engine::Impl {
     }
     for (int i = -grid_size; i <= grid_size; ++i) {
       float t = static_cast<float>(i) / grid_size;
+      // old:  (x=-1, y=0, z=t), (x=1, y=0, z=t), (x=t, y=0, z=-1), (x=t, y=0,
+      // z=1) new:  (x=-1, y=t, z=0), (x=1, y=t, z=0), (x=t, y=-1, z=0), (x=t,
+      // y=1, z=0)
+
+      // horizontal line in X direction at Y=t, Z=0
       grid_position.push_back(-1.f);
-      grid_position.push_back(0);
       grid_position.push_back(t);
+      grid_position.push_back(0.f);
       grid_color.push_back(0.5f);
       grid_color.push_back(0.5f);
       grid_color.push_back(0.5f);
       grid_color.push_back(1.f);
 
       grid_position.push_back(1.f);
-      grid_position.push_back(0);
       grid_position.push_back(t);
+      grid_position.push_back(0.f);
       grid_color.push_back(0.5f);
       grid_color.push_back(0.5f);
       grid_color.push_back(0.5f);
       grid_color.push_back(1.f);
 
+      // vertical line in Y direction at X=t, Z=0
       grid_position.push_back(t);
-      grid_position.push_back(0);
       grid_position.push_back(-1.f);
+      grid_position.push_back(0.f);
       grid_color.push_back(0.5f);
       grid_color.push_back(0.5f);
       grid_color.push_back(0.5f);
       grid_color.push_back(1.f);
 
       grid_position.push_back(t);
-      grid_position.push_back(0);
       grid_position.push_back(1.f);
+      grid_position.push_back(0.f);
       grid_color.push_back(0.5f);
       grid_color.push_back(0.5f);
       grid_color.push_back(0.5f);
       grid_color.push_back(1.f);
     }
-
     splat_index_buffer_ = vk::Buffer(
         context_, splat_index.size() * sizeof(float),
         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
@@ -954,10 +959,10 @@ class Engine::Impl {
             camera_.Translate(0.f, 0.f, -speed * dt);
           }
           if (ImGui::IsKeyDown(ImGuiKey_A)) {
-            camera_.Translate(speed * dt, 0.f);
+            camera_.Translate(-speed * dt, 0.f);
           }
           if (ImGui::IsKeyDown(ImGuiKey_D)) {
-            camera_.Translate(-speed * dt, 0.f);
+            camera_.Translate(speed * dt, 0.f);
           }
           if (ImGui::IsKeyDown(ImGuiKey_Space)) {
             camera_.Translate(0.f, speed * dt);

@@ -1,8 +1,9 @@
 #include <vkgs/scene/camera.h>
-
+#include <iostream>
 #include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
-
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>
 namespace vkgs {
 
 Camera::Camera() {}
@@ -11,6 +12,46 @@ Camera::~Camera() {}
 void Camera::SetWindowSize(uint32_t width, uint32_t height) {
   width_ = width;
   height_ = height;
+}
+
+void Camera::SetPosition(const glm::mat4& transform) {
+  // Extract translation
+  center_ = glm::vec3(transform[0][3], transform[1][3], transform[2][3]);
+  std::cout << "Center: (" << center_.x << ", " << center_.y << ", "
+            << center_.z << ")" << std::endl;
+}
+
+void Camera::SetPosition(const glm::vec3& position) {
+  center_ = position;
+  std::cout << "Center: (" << center_.x << ", " << center_.y << ", "
+            << center_.z << ")" << std::endl;
+}
+
+void Camera::SetOrientation(const glm::quat& orientation) {
+  glm::mat4 transform = glm::toMat4(orientation);
+
+  // Extract translation
+  center_ = glm::vec3(transform[3]);
+
+  // Extract rotation
+  glm::vec3 forward = glm::normalize(glm::vec3(transform[2]));
+  glm::vec3 right = glm::normalize(glm::vec3(transform[0]));
+  glm::vec3 up = glm::normalize(glm::vec3(transform[1]));
+
+  // Calculate spherical coordinates from the forward vector
+  phi_ = std::acos(forward.z);
+  theta_ = std::atan2(forward.y, forward.x);
+
+  std::cout << "Orientation set. Center: (" << center_.x << ", " << center_.y
+            << ", " << center_.z << ")" << std::endl;
+}
+glm::quat Camera::Orientation() const {
+  glm::vec3 forward = glm::normalize(Eye() - center_);
+  glm::vec3 right =
+      glm::normalize(glm::cross(forward, glm::vec3(0.f, 0.f, 1.f)));
+  glm::vec3 up = glm::cross(right, forward);
+
+  return glm::quat_cast(glm::mat3(right, up, -forward));
 }
 
 void Camera::SetFov(float fov) {

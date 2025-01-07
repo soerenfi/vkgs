@@ -37,6 +37,11 @@ class Camera {
   void Translate(float x, float y, float z = 0.f);
   void Zoom(float x);
   void DollyZoom(float scroll);
+  void SetPosition(const glm::mat4& quaternionMatrix);
+  void SetPosition(const glm::vec3& position);
+  void SetOrientation(const glm::quat& orientation);
+  glm::vec3 Position() const noexcept { return center_; }
+  glm::quat Orientation() const;
 
  private:
   uint32_t width_ = 256;

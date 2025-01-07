@@ -15,7 +15,7 @@ class Engine {
 
   void LoadSplats(const std::string& ply_filepath);
   void LoadSplatsAsync(const std::string& ply_filepath);
-
+  void LoadTrajectory(const std::string& trajectory_path);
   void Run();
 
   void Close();

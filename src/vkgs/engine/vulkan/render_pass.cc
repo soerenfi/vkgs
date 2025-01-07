@@ -64,6 +64,8 @@ class RenderPass::Impl {
       attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
       attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
       attachments[2].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+      //   attachments[2].finalLayout =
+      //   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 
     std::vector<VkAttachmentReference2> pass0_colors(1);
@@ -90,7 +92,7 @@ class RenderPass::Impl {
     subpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpasses[0].colorAttachmentCount = pass0_colors.size();
     subpasses[0].pColorAttachments = pass0_colors.data();
-    subpasses[0].pDepthStencilAttachment = &pass0_depth;
+    // subpasses[0].pDepthStencilAttachment = &pass0_depth;
 
     if (samples != VK_SAMPLE_COUNT_1_BIT) {
       subpasses[0].pResolveAttachments = &pass0_resolve;

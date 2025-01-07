@@ -15,7 +15,8 @@ class Swapchain::Impl {
       present_mode_ = VK_PRESENT_MODE_MAILBOX_KHR;
     }
 
-    usage_ = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    usage_ = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+             VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     format_ = VK_FORMAT_B8G8R8A8_UNORM;
 
     VkSurfaceCapabilitiesKHR surface_capabilities;

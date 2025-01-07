@@ -27,7 +27,8 @@ class Attachment::Impl {
 
       default:
         usage_ = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                 VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                 VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         aspect = VK_IMAGE_ASPECT_COLOR_BIT;
         break;
     }

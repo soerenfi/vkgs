@@ -4,10 +4,15 @@
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
+#include <thread>
 #include <mutex>
 #include <map>
 
+#include <filesystem>
+#include <fstream>
+
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -108,6 +113,7 @@ class Engine::Impl {
     TriangleList,
     GeometryShader,
   };
+  std::vector<glm::mat4> trajectory_matrices_;
 
  public:
   Impl() {
@@ -116,20 +122,12 @@ class Engine::Impl {
 
     context_ = vk::Context(0);
 
-    std::vector<RenderPassKey> render_pass_keys = {
-        {VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_D16_UNORM},
-        {VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_D32_SFLOAT},
-        {VK_SAMPLE_COUNT_2_BIT, VK_FORMAT_D16_UNORM},
-        {VK_SAMPLE_COUNT_2_BIT, VK_FORMAT_D32_SFLOAT},
-        {VK_SAMPLE_COUNT_4_BIT, VK_FORMAT_D16_UNORM},
-        {VK_SAMPLE_COUNT_4_BIT, VK_FORMAT_D32_SFLOAT},
-    };
+    samples_ = VK_SAMPLE_COUNT_1_BIT;
+
+    depth_format_ = VK_FORMAT_D32_SFLOAT;
 
     // render pass
-    for (const auto& key : render_pass_keys) {
-      render_passes_[key] =
-          vk::RenderPass(context_, key.samples, key.depth_format);
-    }
+    render_pass_ = vk::RenderPass(context_, samples_, depth_format_);
 
     {
       vk::DescriptorLayoutCreateInfo descriptor_layout_info = {};
@@ -344,11 +342,9 @@ class Engine::Impl {
       pipeline_info.color_blend_attachments =
           std::move(color_blend_attachments);
 
-      for (const auto& key : render_pass_keys) {
-        pipeline_info.render_pass = render_passes_[key];
-        pipeline_info.samples = key.samples;
-        splat_pipelines_[key] = vk::GraphicsPipeline(context_, pipeline_info);
-      }
+      pipeline_info.render_pass = render_pass_;
+      pipeline_info.samples = samples_;
+      splat_pipeline_ = vk::GraphicsPipeline(context_, pipeline_info);
     }
 
     // splat geom pipeline
@@ -403,12 +399,9 @@ class Engine::Impl {
       pipeline_info.color_blend_attachments =
           std::move(color_blend_attachments);
 
-      for (const auto& key : render_pass_keys) {
-        pipeline_info.render_pass = render_passes_[key];
-        pipeline_info.samples = key.samples;
-        splat_geom_pipelines_[key] =
-            vk::GraphicsPipeline(context_, pipeline_info);
-      }
+      pipeline_info.render_pass = render_pass_;
+      pipeline_info.samples = samples_;
+      splat_geom_pipeline_ = vk::GraphicsPipeline(context_, pipeline_info);
     }
 
     // color pipeline
@@ -465,12 +458,9 @@ class Engine::Impl {
       pipeline_info.color_blend_attachments =
           std::move(color_blend_attachments);
 
-      for (const auto& key : render_pass_keys) {
-        pipeline_info.render_pass = render_passes_[key];
-        pipeline_info.samples = key.samples;
-        color_line_pipelines_[key] =
-            vk::GraphicsPipeline(context_, pipeline_info);
-      }
+      pipeline_info.render_pass = render_pass_;
+      pipeline_info.samples = samples_;
+      color_line_pipeline_ = vk::GraphicsPipeline(context_, pipeline_info);
     }
 
     // uniforms and descriptors
@@ -656,6 +646,89 @@ class Engine::Impl {
     pending_ply_filepath_ = ply_filepath;
   }
 
+  void LoadTrajectory(const std::string& trajectory_path) {
+    namespace fs = std::filesystem;
+    std::map<int, fs::path> sorted_files;
+    for (const auto& entry : fs::directory_iterator(trajectory_path)) {
+      if (entry.path().extension() == ".txt") {
+        std::string filename = entry.path().stem().string();
+        int file_number = std::stoi(filename);
+        sorted_files[file_number] = entry.path();
+      }
+    }
+
+    for (const auto& [file_number, path] : sorted_files) {
+      std::ifstream file(path);
+      if (file.is_open()) {
+        std::string line;
+        glm::mat4 matrix(1.0f);
+        for (int i = 0; i < 4; ++i) {
+          if (std::getline(file, line)) {
+            std::istringstream iss(line);
+            iss >> matrix[i][0] >> matrix[i][1] >> matrix[i][2] >> matrix[i][3];
+          }
+        }
+        trajectory_matrices_.push_back(matrix);
+        std::cout << "Loaded matrix from " << path << ":" << std::endl;
+        for (int i = 0; i < 4; ++i) {
+          for (int j = 0; j < 4; ++j) {
+            std::cout << matrix[i][j] << " ";
+          }
+          std::cout << std::endl;
+        }
+        file.close();
+      }
+    }
+  }
+
+  void TransitionImageLayout(VkCommandBuffer command_buffer, VkImage image,
+                             VkImageLayout old_layout,
+                             VkImageLayout new_layout) {
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = old_layout;
+    barrier.newLayout = new_layout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    VkPipelineStageFlags source_stage;
+    VkPipelineStageFlags destination_stage;
+
+    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+        new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+      barrier.srcAccessMask = 0;
+      barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+      source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+      destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+               new_layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) {
+      barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+
+      source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+      destination_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+               new_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+      barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+      source_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+      destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else {
+      throw std::invalid_argument("unsupported layout transition!");
+    }
+
+    vkCmdPipelineBarrier(command_buffer, source_stage, destination_stage, 0, 0,
+                         nullptr, 0, nullptr, 1, &barrier);
+  }
+
   void Run() {
     // create window
     width_ = 1920;
@@ -680,7 +753,7 @@ class Engine::Impl {
     init_info.Subpass = 0;
     init_info.MinImageCount = 3;
     init_info.ImageCount = 3;
-    init_info.RenderPass = render_passes_[{samples_, depth_format_}];
+    init_info.RenderPass = render_pass_;
     init_info.MSAASamples = samples_;
     init_info.Allocator = VK_NULL_HANDLE;
     init_info.CheckVkResultFn = check_vk_result;
@@ -700,6 +773,7 @@ class Engine::Impl {
 
     // main loop
     while (!glfwWindowShouldClose(window_) && !terminate_) {
+      auto frame_start_time = std::chrono::high_resolution_clock::now();
       glfwPollEvents();
 
       // load pending file from async request
@@ -715,7 +789,90 @@ class Engine::Impl {
       glfwGetFramebufferSize(window_, &width, &height);
       camera_.SetWindowSize(width, height);
 
+      if (follow_trajectory_ && frame_counter_ % 100 == 0 &&
+          !trajectory_matrices_.empty()) {
+        static size_t trajectory_index = 0;
+        camera_.SetPosition(trajectory_matrices_[trajectory_index]);
+        trajectory_index = (trajectory_index + 1) % trajectory_matrices_.size();
+        trajectory_index++;
+      }
+
+      // if (drive_) {
+      //   // Read WASD keys and use as input for driving
+      //   float steering_angle = 0.0f;
+      //   float velocity = 0.0f;
+      //   const float max_velocity = 10.0f;  // Maximum velocity
+      //   const float acceleration = 5.0f;   // Acceleration rate
+      //   const float deceleration = 5.0f;   // Deceleration rate
+      //   const float steering_rate =
+      //       glm::radians(30.0f);  // Steering rate in radians per second
+
+      //   if (ImGui::IsKeyDown(ImGuiKey_W)) {
+      //     velocity += acceleration * io.DeltaTime;
+      //   }
+      //   if (ImGui::IsKeyDown(ImGuiKey_S)) {
+      //     velocity -= deceleration * io.DeltaTime;
+      //   }
+      //   if (ImGui::IsKeyDown(ImGuiKey_A)) {
+      //     steering_angle += steering_rate * io.DeltaTime;
+      //   }
+      //   if (ImGui::IsKeyDown(ImGuiKey_D)) {
+      //     steering_angle -= steering_rate * io.DeltaTime;
+      //   }
+      //   float delta_time = 0.01;
+      //   // Clamp the velocity to the maximum allowed value
+      //   velocity = glm::clamp(velocity, -max_velocity, max_velocity);
+
+      //   // Vehicle parameters
+      //   const float wheelbase = 2.5f;  // Distance between front and rear
+      //   axles const float max_steering_angle =
+      //       glm::radians(30.0f);  // Maximum steering angle in radians
+
+      //   // Clamp the steering angle to the maximum allowed value
+      //   steering_angle =
+      //       glm::clamp(steering_angle, -max_steering_angle,
+      //       max_steering_angle);
+
+      //   // Calculate the turning radius
+      //   float turning_radius = wheelbase / glm::tan(steering_angle);
+
+      //   // Calculate the angular velocity
+      //   float angular_velocity = velocity / turning_radius;
+
+      //   // Update the vehicle's position and orientation
+      //   glm::vec3 position = camera_.Eye();
+      //   glm::quat orientation = camera_.Orientation();
+
+      //   // Calculate the change in orientation
+      //   glm::quat delta_orientation = glm::angleAxis(
+      //       angular_velocity * delta_time, glm::vec3(0.0f, 0.0f, 1.0f));
+
+      //   // Update the orientation
+      //   orientation = delta_orientation * orientation;
+
+      //   // Calculate the forward direction
+      //   glm::vec3 forward = orientation * glm::vec3(0.0f, 1.0f, 0.0f);
+
+      //   // Update the position
+      //   position += forward * velocity * delta_time;
+
+      //   // Set the new position and orientation
+      //   camera_.SetPosition(position);
+      //   camera_.SetOrientation(orientation);
+      // }
+
       Draw();
+      // Calculate frame duration and sleep if necessary to limit to 30 FPS
+      auto frame_end_time = std::chrono::high_resolution_clock::now();
+      std::chrono::duration<double, std::milli> frame_duration =
+          frame_end_time - frame_start_time;
+      double frame_time_ms = frame_duration.count();
+      double target_frame_time_ms = 1000.0 / 30.0;  // 30 FPS target
+
+      if (frame_time_ms < target_frame_time_ms) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(
+            static_cast<int>(target_frame_time_ms - frame_time_ms)));
+      }
     }
 
     vkDeviceWaitIdle(context_.device());
@@ -927,9 +1084,12 @@ class Engine::Impl {
 
         if (ImGui::BeginMainMenuBar()) {
           if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Create")) {
+            if (ImGui::MenuItem("Add")) {
             }
             if (ImGui::MenuItem("Open", "Ctrl+O")) {
+            }
+            if (ImGui::MenuItem("Load Trajectory")) {
+              // loadTrajectory();
             }
             if (ImGui::MenuItem("Save", "Ctrl+S")) {
             }
@@ -1061,6 +1221,9 @@ class Engine::Impl {
           ImGui::SameLine();
           ImGui::RadioButton("off", &vsync, 0);
 
+          ImGui::Checkbox("FollowTrajectory", &follow_trajectory_);
+          ImGui::Checkbox("Drive", &drive_);
+
           if (vsync)
             swapchain_.SetVsync(true);
           else
@@ -1159,7 +1322,10 @@ class Engine::Impl {
           }
           ImGui::PopID();
         }
-        if (ImGui::Begin("viewport")) {
+        if (ImGui::Begin("Viewport")) {
+          ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
+          ImGui::Image((ImTextureID)(intptr_t)offscreen_descriptor_set_,
+                       ImVec2{viewportPanelSize.x, viewportPanelSize.y});
           ImGui::End();
         }
 
@@ -1167,7 +1333,8 @@ class Engine::Impl {
         ImGui::Render();
 
         // // Update and Render additional Platform Windows
-        // if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        // if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+        // {
         //   ImGui::UpdatePlatformWindows();
         //   ImGui::RenderPlatformWindowsDefault();
         //   // TODO for OpenGL: restore current GL context.
@@ -1476,9 +1643,11 @@ class Engine::Impl {
           vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                               timestamp_query_pool, 9);
 
+          // DrawNormalPass(cb, frame_index, swapchain_.width(),
+          //                swapchain_.height(),
+          //                swapchain_.image_view(image_index));
           DrawNormalPass(cb, frame_index, swapchain_.width(),
-                         swapchain_.height(),
-                         swapchain_.image_view(image_index));
+                         swapchain_.height(), offscreen_image_view_);
 
           vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
                               timestamp_query_pool, 10);
@@ -1489,13 +1658,50 @@ class Engine::Impl {
                             timestamp_query_pool, 9);
 
         DrawNormalPass(cb, frame_index, swapchain_.width(), swapchain_.height(),
-                       swapchain_.image_view(image_index));
+                       offscreen_image_view_);
 
         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
                             timestamp_query_pool, 10);
         frame_info.drew_splats = false;
       }
 
+      // Transition the offscreen image layout to
+      // // VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+      TransitionImageLayout(cb, offscreen_image_,
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+      // Transition the swapchain image layout to
+      // // VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+      TransitionImageLayout(cb, swapchain_.image(image_index),
+                            VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+      // Copy the offscreen image to the swapchain image
+      VkImageCopy copy_region = {};
+      copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      copy_region.srcSubresource.mipLevel = 0;
+      copy_region.srcSubresource.baseArrayLayer = 0;
+      copy_region.srcSubresource.layerCount = 1;
+      copy_region.srcOffset = {0, 0, 0};
+      copy_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      copy_region.dstSubresource.mipLevel = 0;
+      copy_region.dstSubresource.baseArrayLayer = 0;
+      copy_region.dstSubresource.layerCount = 1;
+      copy_region.dstOffset = {0, 0, 0};
+      copy_region.extent.width = width_;
+      copy_region.extent.height = height_;
+      copy_region.extent.depth = 1;
+
+      vkCmdCopyImage(cb, offscreen_image_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     swapchain_.image(image_index),
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+
+      // Transition the swapchain image layout to
+      // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+      TransitionImageLayout(cb, swapchain_.image(image_index),
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
       vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                           timestamp_query_pool, 11);
 
@@ -1571,7 +1777,7 @@ class Engine::Impl {
         init_info.ImageCount = 3;
         init_info.Allocator = VK_NULL_HANDLE;
         init_info.CheckVkResultFn = check_vk_result;
-        init_info.RenderPass = render_passes_[{samples_, depth_format_}];
+        init_info.RenderPass = render_pass_;
         init_info.MSAASamples = samples_;
 
         // wait for all presentations submitted, before recreate imgui vulkan
@@ -1588,6 +1794,9 @@ class Engine::Impl {
 
   void DrawNormalPass(VkCommandBuffer cb, uint32_t frame_index, uint32_t width,
                       uint32_t height, VkImageView target_image_view) {
+    if (target_image_view == nullptr) {
+      throw std::runtime_error("target_image_view is null!");
+    }
     std::vector<VkClearValue> clear_values(2);
     clear_values[0].color.float32[0] = 0.0f;
     clear_values[0].color.float32[1] = 0.0f;
@@ -1620,8 +1829,7 @@ class Engine::Impl {
     render_pass_begin_info.renderArea.extent = {width, height};
     render_pass_begin_info.clearValueCount = clear_values.size();
     render_pass_begin_info.pClearValues = clear_values.data();
-    render_pass_begin_info.renderPass =
-        render_passes_[{samples_, depth_format_}];
+    render_pass_begin_info.renderPass = render_pass_;
     render_pass_attachments_info.attachmentCount =
         render_pass_attachments.size();
     render_pass_attachments_info.pAttachments = render_pass_attachments.data();
@@ -1654,7 +1862,7 @@ class Engine::Impl {
     // draw axis and grid
     {
       vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        color_line_pipelines_[{samples_, depth_format_}]);
+                        color_line_pipeline_);
 
       glm::mat4 model(1.f);
       model[0][0] = 10.f;
@@ -1691,7 +1899,7 @@ class Engine::Impl {
       switch (splat_render_mode_) {
         case SplatRenderMode::TriangleList: {
           vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            splat_pipelines_[{samples_, depth_format_}]);
+                            splat_pipeline_);
 
           vkCmdBindIndexBuffer(cb, splat_index_buffer_, 0,
                                VK_INDEX_TYPE_UINT32);
@@ -1701,7 +1909,7 @@ class Engine::Impl {
 
         case SplatRenderMode::GeometryShader: {
           vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            splat_geom_pipelines_[{samples_, depth_format_}]);
+                            splat_geom_pipeline_);
 
           std::vector<VkBuffer> vbs = {splat_storage_.instance};
           std::vector<VkDeviceSize> vb_offsets = {0};
@@ -1731,22 +1939,149 @@ class Engine::Impl {
     vk::FramebufferCreateInfo framebuffer_info;
     framebuffer_info.width = swapchain_.width();
     framebuffer_info.height = swapchain_.height();
-    framebuffer_info.render_pass = render_passes_[{samples_, depth_format_}];
+    framebuffer_info.render_pass = render_pass_;
 
-    if (samples_ == VK_SAMPLE_COUNT_1_BIT) {
-      framebuffer_info.image_specs = {
-          swapchain_.image_spec(),
-          depth_attachment_.image_spec(),
-      };
-    } else {
-      framebuffer_info.image_specs = {
-          color_attachment_.image_spec(),
-          depth_attachment_.image_spec(),
-          swapchain_.image_spec(),
-      };
-    }
+    // if (samples_ == VK_SAMPLE_COUNT_1_BIT) {
+    framebuffer_info.image_specs = {
+        swapchain_.image_spec(),
+        depth_attachment_.image_spec(),
+    };
+    // } else {
+    //   framebuffer_info.image_specs = {
+    //       color_attachment_.image_spec(),
+    //       depth_attachment_.image_spec(),
+    //       swapchain_.image_spec(),
+    //   };
+    // }
 
     framebuffer_ = vk::Framebuffer(context_, framebuffer_info);
+
+    VkImageCreateInfo image_info = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = VK_FORMAT_B8G8R8A8_UNORM;
+    image_info.extent.width = width_;
+    image_info.extent.height = height_;
+    image_info.extent.depth = 1;
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |  // so we can render to it
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VmaAllocationCreateInfo alloc_info = {};
+    alloc_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+    alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+    if (vmaCreateImage(context_.allocator(), &image_info, &alloc_info,
+                       &offscreen_image_, &offscreen_image_allocation_,
+                       NULL) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create offscreen image!");
+    }
+
+    // Create image view for the offscreen image
+    VkImageViewCreateInfo view_info = {};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = offscreen_image_;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = VK_FORMAT_B8G8R8A8_UNORM;
+    view_info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    if (vkCreateImageView(context_.device(), &view_info, nullptr,
+                          &offscreen_image_view_) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create offscreen image view!");
+    }
+    // Define the descriptor set layout bindings
+    VkDescriptorSetLayoutBinding layout_binding = {};
+    layout_binding.binding = 0;
+    layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    layout_binding.descriptorCount = 1;
+    layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    layout_binding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo layout_info = {};
+    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout_info.bindingCount = 1;
+    layout_info.pBindings = &layout_binding;
+
+    if (vkCreateDescriptorSetLayout(context_.device(), &layout_info, nullptr,
+                                    &descriptor_set_layout_) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create descriptor set layout!");
+    }
+    // Create the sampler
+    VkSamplerCreateInfo sampler_info = {};
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter = VK_FILTER_LINEAR;
+    sampler_info.minFilter = VK_FILTER_LINEAR;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler_info.anisotropyEnable = VK_TRUE;
+    sampler_info.maxAnisotropy = 16;
+    sampler_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    sampler_info.unnormalizedCoordinates = VK_FALSE;
+    sampler_info.compareEnable = VK_FALSE;
+    sampler_info.compareOp = VK_COMPARE_OP_ALWAYS;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler_info.mipLodBias = 0.0f;
+    sampler_info.minLod = 0.0f;
+    sampler_info.maxLod = 0.0f;
+
+    if (vkCreateSampler(context_.device(), &sampler_info, nullptr,
+                        &offscreen_sampler_) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create sampler!");
+    }
+
+    // Create the descriptor pool
+    VkDescriptorPoolSize pool_size = {};
+    pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_size.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    pool_info.maxSets = 1;
+
+    if (vkCreateDescriptorPool(context_.device(), &pool_info, nullptr,
+                               &descriptor_pool_) != VK_SUCCESS) {
+      throw std::runtime_error("failed to create descriptor pool!");
+    }
+    // Allocate the descriptor set
+    VkDescriptorSetAllocateInfo descriptor_alloc_info = {};
+    descriptor_alloc_info.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    descriptor_alloc_info.descriptorPool = descriptor_pool_;
+    descriptor_alloc_info.descriptorSetCount = 1;
+    descriptor_alloc_info.pSetLayouts =
+        &descriptor_set_layout_;  // Assuming you have a descriptor set layout
+
+    if (vkAllocateDescriptorSets(context_.device(), &descriptor_alloc_info,
+                                 &offscreen_descriptor_set_) != VK_SUCCESS) {
+      throw std::runtime_error("failed to allocate descriptor set!");
+    }
+
+    // Create a Vulkan texture from the offscreen image
+    VkDescriptorImageInfo descriptor_image_info = {};
+    descriptor_image_info.imageLayout =
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    descriptor_image_info.imageView = offscreen_image_view_;
+    descriptor_image_info.sampler =
+        offscreen_sampler_;  // Assuming you have a sampler created
+
+    VkWriteDescriptorSet write_descriptor = {};
+    write_descriptor.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write_descriptor.dstSet =
+        offscreen_descriptor_set_;  // Assuming you have an ImGui descriptor set
+    write_descriptor.dstBinding = 0;
+    write_descriptor.dstArrayElement = 0;
+    write_descriptor.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write_descriptor.descriptorCount = 1;
+    write_descriptor.pImageInfo = &descriptor_image_info;
+
+    vkUpdateDescriptorSets(context_.device(), 1, &write_descriptor, 0, nullptr);
   }
 
   std::atomic_bool terminate_ = false;
@@ -1766,6 +2101,15 @@ class Engine::Impl {
 
   vk::Context context_;
   vk::Swapchain swapchain_;
+
+  VkImage offscreen_image_;
+  VmaAllocation offscreen_image_allocation_ = VK_NULL_HANDLE;
+  VkDeviceMemory offscreen_image_memory_;
+  VkImageView offscreen_image_view_;
+  VkDescriptorSet offscreen_descriptor_set_;
+  VkDescriptorSetLayout descriptor_set_layout_;
+  VkDescriptorPool descriptor_pool_;
+  VkSampler offscreen_sampler_;
 
   std::vector<VkCommandBuffer> draw_command_buffers_;
   std::vector<VkSemaphore> image_acquired_semaphores_;
@@ -1790,10 +2134,10 @@ class Engine::Impl {
 
   // normal pass
   vk::Framebuffer framebuffer_;
-  std::map<RenderPassKey, vk::RenderPass> render_passes_;
-  std::map<RenderPassKey, vk::GraphicsPipeline> color_line_pipelines_;
-  std::map<RenderPassKey, vk::GraphicsPipeline> splat_pipelines_;
-  std::map<RenderPassKey, vk::GraphicsPipeline> splat_geom_pipelines_;
+  vk::RenderPass render_pass_;
+  vk::GraphicsPipeline color_line_pipeline_;
+  vk::GraphicsPipeline splat_pipeline_;
+  vk::GraphicsPipeline splat_geom_pipeline_;
 
   vk::Attachment color_attachment_;
   vk::Attachment depth_attachment_;
@@ -1863,6 +2207,8 @@ class Engine::Impl {
 
   bool show_axis_ = true;
   bool show_grid_ = true;
+  bool follow_trajectory_ = false;
+  bool drive_ = false;
 
   vk::CpuBuffer visible_point_count_cpu_buffer_;  // (2) for debug
 
@@ -1891,6 +2237,10 @@ void Engine::LoadSplats(const std::string& ply_filepath) {
 
 void Engine::LoadSplatsAsync(const std::string& ply_filepath) {
   impl_->LoadSplatsAsync(ply_filepath);
+}
+
+void Engine::LoadTrajectory(const std::string& trajectory_filepath) {
+  impl_->LoadTrajectory(trajectory_filepath);
 }
 
 void Engine::Run() { impl_->Run(); }

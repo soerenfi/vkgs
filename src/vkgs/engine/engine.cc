@@ -508,8 +508,8 @@ class Engine::Impl {
     render_finished_semaphores_.resize(2);
     render_finished_fences_.resize(2);
     for (int i = 0; i < 2; ++i) {
-      vkCreateSemaphore(context_.device(), &semaphore_info, NULL,
-                        &render_finished_semaphores_[i]);
+      // vkCreateSemaphore(context_.device(), &semaphore_info, NULL,
+      //                   &render_finished_semaphores_[i]);
       vkCreateFence(context_.device(), &fence_info, NULL,
                     &render_finished_fences_[i]);
     }
@@ -606,11 +606,13 @@ class Engine::Impl {
 
     PreparePrimitives();
 
-    // Setup Dear ImGui
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGui::StyleColorsDark();
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // // Setup Dear ImGui
+    // IMGUI_CHECKVERSION();
+    // ImGui::CreateContext();
+    // ImGui::StyleColorsDark();
+    //     ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = (m_pCaptureParam
+    //     != nullptr);
+    // ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     // ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   }
 
@@ -631,7 +633,7 @@ class Engine::Impl {
 
     for (auto query_pool : timestamp_query_pools_)
       vkDestroyQueryPool(context_.device(), query_pool, NULL);
-    ImGui::DestroyContext();
+    // ImGui::DestroyContext();
 
     glfwTerminate();
   }
@@ -728,6 +730,49 @@ class Engine::Impl {
     vkCmdPipelineBarrier(command_buffer, source_stage, destination_stage, 0, 0,
                          nullptr, 0, nullptr, 1, &barrier);
   }
+  void SetupVulkanWindow(ImGui_ImplVulkanH_Window* wd, VkSurfaceKHR surface,
+                         int width, int height) {
+    wd->Surface = surface;
+
+    // Check for WSI support
+    VkBool32 res;
+    vkGetPhysicalDeviceSurfaceSupportKHR(context_.physical_device(),
+                                         context_.graphics_queue_family_index(),
+                                         wd->Surface, &res);
+    if (res != VK_TRUE) {
+      fprintf(stderr, "Error no WSI support on physical device 0\n");
+      exit(-1);
+    }
+
+    // Select Surface Format
+    const VkFormat requestSurfaceImageFormat[] = {
+        VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
+        VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
+    const VkColorSpaceKHR requestSurfaceColorSpace =
+        VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+    wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(
+        context_.physical_device(), wd->Surface, requestSurfaceImageFormat,
+        (size_t)IM_ARRAYSIZE(requestSurfaceImageFormat),
+        requestSurfaceColorSpace);
+
+    // Select Present Mode
+#ifdef APP_USE_UNLIMITED_FRAME_RATE
+    VkPresentModeKHR present_modes[] = {VK_PRESENT_MODE_MAILBOX_KHR,
+                                        VK_PRESENT_MODE_IMMEDIATE_KHR,
+                                        VK_PRESENT_MODE_FIFO_KHR};
+#else
+    VkPresentModeKHR present_modes[] = {VK_PRESENT_MODE_FIFO_KHR};
+#endif
+    wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(
+        context_.physical_device(), wd->Surface, &present_modes[0],
+        IM_ARRAYSIZE(present_modes));
+    // printf("[vulkan] Selected PresentMode = %d\n", wd->PresentMode);
+
+    // Create SwapChain, RenderPass, Framebuffer, etc.
+    ImGui_ImplVulkanH_CreateOrResizeWindow(
+        context_.instance(), context_.physical_device(), context_.device(), wd,
+        context_.graphics_queue_family_index(), NULL, width, height, 3);
+  }
 
   void Run() {
     // create window
@@ -736,6 +781,42 @@ class Engine::Impl {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     window_ = glfwCreateWindow(width_, height_, "vkgs", NULL, NULL);
+
+    // ImVector<const char*> extensions;
+    // uint32_t extensions_count = 0;
+    // const char** glfw_extensions =
+    // glfwGetRequiredInstanceExtensions(&extensions_count); for (uint32_t i =
+    // 0; i < extensions_count; i++)
+    //     extensions.push_back(glfw_extensions[i]);
+    // SetupVulkan(extensions);
+
+    // Create Window Surface
+    VkSurfaceKHR surface;
+    VkResult err =
+        glfwCreateWindowSurface(context_.instance(), window_, NULL, &surface);
+    check_vk_result(err);
+
+    // Create Framebuffers
+    int w, h;
+    glfwGetFramebufferSize(window_, &w, &h);
+    ImGui_ImplVulkanH_Window* wd = &main_window_;
+    SetupVulkanWindow(wd, surface, w, h);
+
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    (void)io;
+    // ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = (m_pCaptureParam !=
+    // nullptr);
+    ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true;
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // io.ConfigFlags |=
+    //     ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+    // io.ConfigFlags |=
+    //     ImGuiConfigFlags_NavEnableGamepad;  // Enable Gamepad Controls
+    // Setup Dear ImGui style
+    ImGui::StyleColorsDark();
 
     // file drop callback
     glfwSetWindowUserPointer(window_, this);
@@ -748,25 +829,39 @@ class Engine::Impl {
     init_info.Device = context_.device();
     init_info.QueueFamily = context_.graphics_queue_family_index();
     init_info.Queue = context_.graphics_queue();
-    init_info.PipelineCache = context_.pipeline_cache();
+    init_info.PipelineCache = VK_NULL_HANDLE;
     init_info.DescriptorPool = context_.descriptor_pool();
     init_info.Subpass = 0;
     init_info.MinImageCount = 3;
-    init_info.ImageCount = 3;
-    init_info.RenderPass = render_pass_;
+    init_info.ImageCount = wd->ImageCount;
+    init_info.RenderPass = wd->RenderPass;
     init_info.MSAASamples = samples_;
     init_info.Allocator = VK_NULL_HANDLE;
     init_info.CheckVkResultFn = check_vk_result;
     ImGui_ImplVulkan_Init(&init_info);
 
-    ImGuiIO& io = ImGui::GetIO();
+    // Upload fonts.
+    // {
+    //     // Use any command queue
+    //     vk::CommandPool command_pool =
+    //     wd->Frames[wd->FrameIndex].CommandPool; vk::CommandBuffer
+    //     command_buffer = wd->Frames[wd->FrameIndex].CommandBuffer;
+    //     VC->Device->resetCommandPool(command_pool,
+    //     vk::CommandPoolResetFlags());
+    //     command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    //     ImGui_ImplVulkan_CreateFontsTexture(command_buffer);
+    //     command_buffer.end();
 
-    // create swapchain
-    VkSurfaceKHR surface;
-    glfwCreateWindowSurface(context_.instance(), window_, NULL, &surface);
-    swapchain_ = vk::Swapchain(context_, surface);
+    //     vk::SubmitInfo submit;
+    //     submit.setCommandBuffers(command_buffer);
+    //     VC->Queue.submit(submit);
+    //     VC->Device->waitIdle();
+    //     ImGui_ImplVulkan_DestroyFontUploadObjects();
+    // }
 
-    RecreateFramebuffer();
+    // swapchain_ = vk::Swapchain(context_, surface);
+
+    createFramebuffer();
 
     glfwShowWindow(window_);
     terminate_ = false;
@@ -859,20 +954,22 @@ class Engine::Impl {
       //   // Set the new position and orientation
       //   camera_.SetPosition(position);
       //   camera_.SetOrientation(orientation);
-      // }
 
-      Draw();
+      RenderFrame();
+      RenderUI();
+
+      // Present();
       // Calculate frame duration and sleep if necessary to limit to 30 FPS
-      auto frame_end_time = std::chrono::high_resolution_clock::now();
-      std::chrono::duration<double, std::milli> frame_duration =
-          frame_end_time - frame_start_time;
-      double frame_time_ms = frame_duration.count();
-      double target_frame_time_ms = 1000.0 / 30.0;  // 30 FPS target
+      // auto frame_end_time = std::chrono::high_resolution_clock::now();
+      // std::chrono::duration<double, std::milli> frame_duration =
+      //     frame_end_time - frame_start_time;
+      // double frame_time_ms = frame_duration.count();
+      // double target_frame_time_ms = 1000.0 / 30.0;  // 30 FPS target
 
-      if (frame_time_ms < target_frame_time_ms) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(
-            static_cast<int>(target_frame_time_ms - frame_time_ms)));
-      }
+      // if (frame_time_ms < target_frame_time_ms) {
+      //   std::this_thread::sleep_for(std::chrono::milliseconds(
+      //       static_cast<int>(target_frame_time_ms - frame_time_ms)));
+      // }
     }
 
     vkDeviceWaitIdle(context_.device());
@@ -1039,442 +1136,307 @@ class Engine::Impl {
     transfer_timeline_++;
   }
 
-  void Draw() {
-    // recreate swapchain if need resize
-    if (swapchain_.ShouldRecreate()) {
-      vkWaitForFences(context_.device(), render_finished_fences_.size(),
-                      render_finished_fences_.data(), VK_TRUE, UINT64_MAX);
-      swapchain_.Recreate();
-      RecreateFramebuffer();
-    }
+  void RenderFrame() {
+    // // recreate swapchain if need resize
+    // if (swapchain_.ShouldRecreate()) {
+    // vkWaitForFences(context_.device(), render_finished_fences_.size(),
+    //                 render_finished_fences_.data(), VK_TRUE, UINT64_MAX);
+    //   swapchain_.Recreate();
+    //   RecreateFramebuffer();
+    // }
 
     int32_t acquire_index = frame_counter_ % 3;
     int32_t frame_index = frame_counter_ % 2;
-    VkSemaphore image_acquired_semaphore =
-        image_acquired_semaphores_[acquire_index];
-    VkSemaphore render_finished_semaphore =
-        render_finished_semaphores_[frame_index];
+    // VkSemaphore image_acquired_semaphore =
+    //     image_acquired_semaphores_[acquire_index];
+    // VkSemaphore render_finished_semaphore =
+    //     render_finished_semaphores_[frame_index];
     VkFence render_finished_fence = render_finished_fences_[frame_index];
     VkCommandBuffer cb = draw_command_buffers_[frame_index];
     VkQueryPool timestamp_query_pool = timestamp_query_pools_[frame_index];
     auto& frame_info = frame_infos_[frame_index];
 
     uint32_t image_index;
-    if (swapchain_.AcquireNextImage(image_acquired_semaphore, &image_index)) {
-      static glm::vec3 lt(0.f);
-      static glm::vec3 gt(0.f);
-      static glm::vec3 lr(0.f);
-      static glm::quat lq;
-      static glm::vec3 gr(0.f);
-      static glm::quat gq;
-      static float scale = 1.f;
-      glm::mat4 model(1.f);
+    // if (swapchain_.AcquireNextImage(image_acquired_semaphore, &image_index))
+    // {
+    static glm::vec3 lt(0.f);
+    static glm::vec3 gt(0.f);
+    static glm::vec3 lr(0.f);
+    static glm::quat lq;
+    static glm::vec3 gr(0.f);
+    static glm::quat gq;
+    static float scale = 1.f;
+    glm::mat4 model(1.f);
 
-      bool msaa_changed = false;
-      static int msaa = 0;
+    bool msaa_changed = false;
+    static int msaa = 0;
 
-      bool depth_format_changed = false;
-      static int depth_format = 1;
+    bool depth_format_changed = false;
+    static int depth_format = 1;
 
-      // draw ui
-      {
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+    model = ToScaleMatrix4(scale_ * scale) * glm::toMat4(gq) *
+            ToTranslationMatrix4(translation_ + gt) *
+            glm::toMat4(rotation_ * lq) * ToTranslationMatrix4(lt);
 
-        if (ImGui::BeginMainMenuBar()) {
-          if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Add")) {
-            }
-            if (ImGui::MenuItem("Open", "Ctrl+O")) {
-            }
-            if (ImGui::MenuItem("Load Trajectory")) {
-              // loadTrajectory();
-            }
-            if (ImGui::MenuItem("Save", "Ctrl+S")) {
-            }
-            if (ImGui::MenuItem("Save as..")) {
-            }
-            ImGui::EndMenu();
-          }
-          ImGui::EndMainMenuBar();
-        }
+    // // record command buffer
+    vkWaitForFences(context_.device(), 1, &render_finished_fence, VK_TRUE,
+                    UINT64_MAX);
+    vkResetFences(context_.device(), 1, &render_finished_fence);
 
-        const auto& io = ImGui::GetIO();
+    // // get timestamps
+    // if (frame_info.drew_splats) {
+    //   std::cout << "Rendering 3fence " << frame_counter_ << std::endl;
 
-        // handle events
-        if (!io.WantCaptureMouse) {
-          bool left = io.MouseDown[ImGuiMouseButton_Left];
-          bool right = io.MouseDown[ImGuiMouseButton_Right];
-          float dx = io.MouseDelta.x;
-          float dy = io.MouseDelta.y;
+    //   std::vector<uint64_t> timestamps(timestamp_count_);
+    //   vkGetQueryPoolResults(
+    //       context_.device(), timestamp_query_pool, 0, timestamps.size(),
+    //       timestamps.size() * sizeof(uint64_t), timestamps.data(),
+    //       sizeof(uint64_t), VK_QUERY_RESULT_64_BIT |
+    //       VK_QUERY_RESULT_WAIT_BIT);
 
-          if (left && !right) {
-            camera_.Rotate(dx, dy);
-          } else if (!left && right) {
-            camera_.Translate(dx, dy);
-          } else if (left && right) {
-            camera_.Zoom(dy);
-          }
+    // frame_info.rank_time = timestamps[2] - timestamps[1];
+    // frame_info.sort_time = timestamps[4] - timestamps[3];
+    // frame_info.inverse_time = timestamps[6] - timestamps[5];
+    // frame_info.projection_time = timestamps[8] - timestamps[7];
+    // frame_info.rendering_time = timestamps[10] - timestamps[9];
+    // frame_info.end_to_end_time = timestamps[11] - timestamps[0];
+    // }
 
-          if (io.MouseWheel != 0.f) {
-            if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
-              camera_.DollyZoom(io.MouseWheel);
-            } else {
-              camera_.Zoom(io.MouseWheel * 10.f);
-            }
-          }
-        }
+    camera_buffer_[frame_index].projection = camera_.ProjectionMatrix();
+    camera_buffer_[frame_index].view = camera_.ViewMatrix();
+    camera_buffer_[frame_index].camera_position = camera_.Eye();
+    camera_buffer_[frame_index].screen_size = {camera_.width(),
+                                               camera_.height()};
 
-        if (!io.WantCaptureKeyboard) {
-          constexpr float speed = 1000.f;
-          float dt = io.DeltaTime;
-          if (ImGui::IsKeyDown(ImGuiKey_W)) {
-            camera_.Translate(0.f, 0.f, speed * dt);
-          }
-          if (ImGui::IsKeyDown(ImGuiKey_S)) {
-            camera_.Translate(0.f, 0.f, -speed * dt);
-          }
-          if (ImGui::IsKeyDown(ImGuiKey_A)) {
-            camera_.Translate(-speed * dt, 0.f);
-          }
-          if (ImGui::IsKeyDown(ImGuiKey_D)) {
-            camera_.Translate(speed * dt, 0.f);
-          }
-          if (ImGui::IsKeyDown(ImGuiKey_Space)) {
-            camera_.Translate(0.f, speed * dt);
-          }
-        }
+    VkCommandBufferBeginInfo command_begin_info = {
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    command_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-        if (ImGui::Begin("vkgs")) {
-          ImGui::Text("%s", context_.device_name().c_str());
-          ImGui::Text("%d total splats", frame_info.total_point_count);
-          ImGui::Text("%d loaded splats", frame_info.loaded_point_count);
+    vkBeginCommandBuffer(cb, &command_begin_info);
 
-          auto loading_progress =
-              frame_info.total_point_count > 0
-                  ? static_cast<float>(frame_info.loaded_point_count) /
-                        frame_info.total_point_count
-                  : 1.f;
-          ImGui::Text("loading:");
-          ImGui::SameLine();
-          ImGui::ProgressBar(loading_progress, ImVec2(-1.f, 16.f));
-          if (ImGui::Button("cancel")) {
-            splat_load_thread_.Cancel();
-          }
+    vkCmdResetQueryPool(cb, timestamp_query_pool, 0, timestamp_count_);
 
-          const auto* visible_point_count_buffer =
-              reinterpret_cast<const uint32_t*>(
-                  visible_point_count_cpu_buffer_.data());
-          uint32_t visible_point_count =
-              visible_point_count_buffer[frame_index];
-          float visible_points_ratio =
-              frame_info.loaded_point_count > 0
-                  ? static_cast<float>(visible_point_count) /
-                        frame_info.loaded_point_count * 100.f
-                  : 0.f;
-          ImGui::Text("%d (%.2f%%) visible splats", visible_point_count,
-                      visible_points_ratio);
+    vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        timestamp_query_pool, 0);
 
-          ImGui::Text("size      : %dx%d", swapchain_.width(),
-                      swapchain_.height());
-          ImGui::Text("fps       : %7.3f", io.Framerate);
-          ImGui::Text("            %7.3fms", 1e3 / io.Framerate);
-          ImGui::Text("frame e2e : %7.3fms",
-                      static_cast<double>(frame_info.end_to_end_time) / 1e6);
+    // check loading status
+    auto progress = splat_load_thread_.GetProgress();
+    frame_info.total_point_count = progress.total_point_count;
+    frame_info.loaded_point_count = progress.loaded_point_count;
+    frame_info.ply_buffer = progress.ply_buffer;
 
-          uint64_t total_time = frame_info.rank_time + frame_info.sort_time +
-                                frame_info.inverse_time +
-                                frame_info.projection_time +
-                                frame_info.rendering_time;
-          ImGui::Text("total     : %7.3fms",
-                      static_cast<double>(total_time) / 1e6);
-          ImGui::Text(
-              "rank      : %7.3fms (%5.2f%%)",
-              static_cast<double>(frame_info.rank_time) / 1e6,
-              static_cast<double>(frame_info.rank_time) / total_time * 100.);
-          ImGui::Text(
-              "sort      : %7.3fms (%5.2f%%)",
-              static_cast<double>(frame_info.sort_time) / 1e6,
-              static_cast<double>(frame_info.sort_time) / total_time * 100.);
-          ImGui::Text(
-              "inverse   : %7.3fms (%5.2f%%)",
-              static_cast<double>(frame_info.inverse_time) / 1e6,
-              static_cast<double>(frame_info.inverse_time) / total_time * 100.);
-          ImGui::Text("projection: %7.3fms (%5.2f%%)",
-                      static_cast<double>(frame_info.projection_time) / 1e6,
-                      static_cast<double>(frame_info.projection_time) /
-                          total_time * 100.);
-          ImGui::Text("rendering : %7.3fms (%5.2f%%)",
-                      static_cast<double>(frame_info.rendering_time) / 1e6,
-                      static_cast<double>(frame_info.rendering_time) /
-                          total_time * 100.);
-          ImGui::Text("present   : %7.3fms",
-                      static_cast<double>(frame_info.present_done_timestamp -
-                                          frame_info.present_timestamp) /
-                          1e6);
+    if (!progress.buffer_barriers.empty()) {
+      loaded_point_count_ = progress.loaded_point_count;
+    }
 
-          static int vsync = 1;
-          ImGui::Text("Vsync");
-          ImGui::SameLine();
-          ImGui::RadioButton("on", &vsync, 1);
-          ImGui::SameLine();
-          ImGui::RadioButton("off", &vsync, 0);
+    // update descriptor
+    descriptors_[frame_index].gaussian.Update(
+        0, splat_info_buffer_, splat_info_buffer_.offset(frame_index),
+        splat_info_buffer_.element_size());
 
-          ImGui::Checkbox("FollowTrajectory", &follow_trajectory_);
-          ImGui::Checkbox("Drive", &drive_);
+    descriptors_[frame_index].splat_instance.Update(
+        0, splat_draw_indirect_, 0, splat_draw_indirect_.size());
 
-          if (vsync)
-            swapchain_.SetVsync(true);
-          else
-            swapchain_.SetVsync(false);
-
-          ImGui::Text("MSAA");
-          ImGui::SameLine();
-          msaa_changed |= ImGui::RadioButton("Off", &msaa, 0);
-          ImGui::SameLine();
-          msaa_changed |= ImGui::RadioButton("2x", &msaa, 1);
-          ImGui::SameLine();
-          msaa_changed |= ImGui::RadioButton("4x", &msaa, 2);
-
-          ImGui::Text("Depth");
-          ImGui::SameLine();
-          depth_format_changed |= ImGui::RadioButton("U16", &depth_format, 0);
-          ImGui::SameLine();
-          depth_format_changed |= ImGui::RadioButton("F32", &depth_format, 1);
-
-          static int draw_method = 0;
-          ImGui::Text("Draw method");
-          ImGui::SameLine();
-          ImGui::RadioButton("Triangles", &draw_method, 0);
-          ImGui::SameLine();
-
-          // clickable only when geometry shader is available
-          ImGui::BeginDisabled(!context_.geometry_shader_available());
-          ImGui::RadioButton("Geom Shader", &draw_method, 1);
-          ImGui::EndDisabled();
-
-          switch (draw_method) {
-            case 0:
-              splat_render_mode_ = SplatRenderMode::TriangleList;
-              break;
-
-            case 1:
-              splat_render_mode_ = SplatRenderMode::GeometryShader;
-              break;
-
-            default:
-              break;
-          }
-
-          ImGui::Checkbox("Axis", &show_axis_);
-          ImGui::SameLine();
-          ImGui::Checkbox("Grid", &show_grid_);
-
-          float fov_degree = glm::degrees(camera_.fov());
-          ImGui::SliderFloat("Fov Y", &fov_degree,
-                             glm::degrees(camera_.min_fov()),
-                             glm::degrees(camera_.max_fov()));
-          camera_.SetFov(glm::radians(fov_degree));
-
-          ImGui::Text("Translation");
-          ImGui::PushID("Translation");
-          ImGui::DragFloat3("local", glm::value_ptr(lt), 0.01f);
-          if (ImGui::IsItemDeactivated()) {
-            translation_ += glm::toMat3(rotation_) * scale_ * lt;
-            lt = glm::vec3(0.f);
-          }
-
-          ImGui::DragFloat3("global", glm::value_ptr(gt), 0.01f);
-          if (ImGui::IsItemDeactivated()) {
-            translation_ += gt;
-            gt = glm::vec3(0.f);
-          }
-          ImGui::PopID();
-
-          ImGui::Text("Rotation");
-          ImGui::PushID("Rotation");
-          ImGui::DragFloat3("local", glm::value_ptr(lr), 0.1f);
-          lq = glm::quat(glm::radians(lr));
-          if (ImGui::IsItemDeactivated()) {
-            rotation_ = rotation_ * lq;
-            lr = glm::vec3(0.f);
-            lq = glm::quat(1.f, 0.f, 0.f, 0.f);
-          }
-
-          ImGui::DragFloat3("global", glm::value_ptr(gr), 0.1f);
-          gq = glm::quat(glm::radians(gr));
-          if (ImGui::IsItemDeactivated()) {
-            translation_ = gq * translation_;
-            rotation_ = gq * rotation_;
-            gr = glm::vec3(0.f);
-            gq = glm::quat(1.f, 0.f, 0.f, 0.f);
-          }
-          ImGui::PopID();
-
-          ImGui::Text("Scale");
-          ImGui::PushID("Scale");
-          ImGui::DragFloat("local", &scale, 0.01f, 0.1f, 10.f, "%.3f",
-                           ImGuiSliderFlags_Logarithmic);
-          if (ImGui::IsItemDeactivated()) {
-            scale_ *= scale;
-            scale = 1.f;
-          }
-          ImGui::PopID();
-        }
-        if (ImGui::Begin("Viewport")) {
-          ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
-          ImGui::Image((ImTextureID)(intptr_t)offscreen_descriptor_set_,
-                       ImVec2{viewportPanelSize.x, viewportPanelSize.y});
-          ImGui::End();
-        }
-
-        ImGui::End();
-        ImGui::Render();
-
-        // // Update and Render additional Platform Windows
-        // if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-        // {
-        //   ImGui::UpdatePlatformWindows();
-        //   ImGui::RenderPlatformWindowsDefault();
-        //   // TODO for OpenGL: restore current GL context.
-        // }
-      }
-
-      model = ToScaleMatrix4(scale_ * scale) * glm::toMat4(gq) *
-              ToTranslationMatrix4(translation_ + gt) *
-              glm::toMat4(rotation_ * lq) * ToTranslationMatrix4(lt);
-
-      // record command buffer
-      vkWaitForFences(context_.device(), 1, &render_finished_fence, VK_TRUE,
-                      UINT64_MAX);
-      vkResetFences(context_.device(), 1, &render_finished_fence);
-
-      // get timestamps
-      if (frame_info.drew_splats) {
-        std::vector<uint64_t> timestamps(timestamp_count_);
-        vkGetQueryPoolResults(
-            context_.device(), timestamp_query_pool, 0, timestamps.size(),
-            timestamps.size() * sizeof(uint64_t), timestamps.data(),
-            sizeof(uint64_t),
-            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-
-        frame_info.rank_time = timestamps[2] - timestamps[1];
-        frame_info.sort_time = timestamps[4] - timestamps[3];
-        frame_info.inverse_time = timestamps[6] - timestamps[5];
-        frame_info.projection_time = timestamps[8] - timestamps[7];
-        frame_info.rendering_time = timestamps[10] - timestamps[9];
-        frame_info.end_to_end_time = timestamps[11] - timestamps[0];
-      }
-
-      camera_buffer_[frame_index].projection = camera_.ProjectionMatrix();
-      camera_buffer_[frame_index].view = camera_.ViewMatrix();
-      camera_buffer_[frame_index].camera_position = camera_.Eye();
-      camera_buffer_[frame_index].screen_size = {camera_.width(),
-                                                 camera_.height()};
-
-      VkCommandBufferBeginInfo command_begin_info = {
-          VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-      command_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-      vkBeginCommandBuffer(cb, &command_begin_info);
-
-      vkCmdResetQueryPool(cb, timestamp_query_pool, 0, timestamp_count_);
-
-      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                          timestamp_query_pool, 0);
-
-      // check loading status
-      auto progress = splat_load_thread_.GetProgress();
-      frame_info.total_point_count = progress.total_point_count;
-      frame_info.loaded_point_count = progress.loaded_point_count;
-      frame_info.ply_buffer = progress.ply_buffer;
-
-      if (!progress.buffer_barriers.empty()) {
-        loaded_point_count_ = progress.loaded_point_count;
-      }
-
-      // update descriptor
+    if (loaded_point_count_ != 0) {
       descriptors_[frame_index].gaussian.Update(
-          0, splat_info_buffer_, splat_info_buffer_.offset(frame_index),
-          splat_info_buffer_.element_size());
+          1, splat_storage_.position, 0,
+          loaded_point_count_ * 3 * sizeof(float));
+      descriptors_[frame_index].gaussian.Update(
+          2, splat_storage_.cov3d, 0, loaded_point_count_ * 6 * sizeof(float));
+      descriptors_[frame_index].gaussian.Update(
+          3, splat_storage_.opacity, 0,
+          loaded_point_count_ * 1 * sizeof(float));
+      descriptors_[frame_index].gaussian.Update(
+          4, splat_storage_.sh, 0, loaded_point_count_ * 48 * sizeof(float));
 
       descriptors_[frame_index].splat_instance.Update(
-          0, splat_draw_indirect_, 0, splat_draw_indirect_.size());
+          1, splat_storage_.instance, 0,
+          loaded_point_count_ * 10 * sizeof(float));
+      descriptors_[frame_index].splat_instance.Update(
+          2, splat_visible_point_count_, 0, splat_visible_point_count_.size());
+      descriptors_[frame_index].splat_instance.Update(
+          3, splat_storage_.key, 0, loaded_point_count_ * sizeof(uint32_t));
+      descriptors_[frame_index].splat_instance.Update(
+          4, splat_storage_.index, 0, loaded_point_count_ * sizeof(uint32_t));
+      descriptors_[frame_index].splat_instance.Update(
+          5, splat_storage_.inverse_index, 0,
+          loaded_point_count_ * sizeof(uint32_t));
+    }
 
-      if (loaded_point_count_ != 0) {
-        descriptors_[frame_index].gaussian.Update(
-            1, splat_storage_.position, 0,
-            loaded_point_count_ * 3 * sizeof(float));
-        descriptors_[frame_index].gaussian.Update(
-            2, splat_storage_.cov3d, 0,
-            loaded_point_count_ * 6 * sizeof(float));
-        descriptors_[frame_index].gaussian.Update(
-            3, splat_storage_.opacity, 0,
-            loaded_point_count_ * 1 * sizeof(float));
-        descriptors_[frame_index].gaussian.Update(
-            4, splat_storage_.sh, 0, loaded_point_count_ * 48 * sizeof(float));
+    // update uniform buffer
+    splat_info_buffer_[frame_index].point_count = loaded_point_count_;
 
-        descriptors_[frame_index].splat_instance.Update(
-            1, splat_storage_.instance, 0,
-            loaded_point_count_ * 10 * sizeof(float));
-        descriptors_[frame_index].splat_instance.Update(
-            2, splat_visible_point_count_, 0,
-            splat_visible_point_count_.size());
-        descriptors_[frame_index].splat_instance.Update(
-            3, splat_storage_.key, 0, loaded_point_count_ * sizeof(uint32_t));
-        descriptors_[frame_index].splat_instance.Update(
-            4, splat_storage_.index, 0, loaded_point_count_ * sizeof(uint32_t));
-        descriptors_[frame_index].splat_instance.Update(
-            5, splat_storage_.inverse_index, 0,
-            loaded_point_count_ * sizeof(uint32_t));
+    VkMemoryBarrier barrier;
+
+    // acquire ownership
+    // according to spec:
+    //   The buffer range or image subresource range specified in an
+    //   acquireoperation must match exactly that of a previous release
+    //   operation.
+    if (!progress.buffer_barriers.empty()) {
+      std::vector<VkBufferMemoryBarrier> buffer_barriers =
+          std::move(progress.buffer_barriers);
+
+      // change src/dst synchronization scope
+      for (auto& buffer_barrier : buffer_barriers) {
+        buffer_barrier.srcAccessMask = 0;
+        buffer_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
       }
 
-      // update uniform buffer
-      splat_info_buffer_[frame_index].point_count = loaded_point_count_;
+      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
+                           buffer_barriers.size(), buffer_barriers.data(), 0,
+                           NULL);
 
-      VkMemoryBarrier barrier;
+      // parse ply file
+      // TODO: make parse async
+      descriptors_[frame_index].ply.Update(0, progress.ply_buffer, 0);
 
-      // acquire ownership
-      // according to spec:
-      //   The buffer range or image subresource range specified in an
-      //   acquireoperation must match exactly that of a previous release
-      //   operation.
-      if (!progress.buffer_barriers.empty()) {
-        std::vector<VkBufferMemoryBarrier> buffer_barriers =
-            std::move(progress.buffer_barriers);
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                        parse_ply_pipeline_);
 
-        // change src/dst synchronization scope
-        for (auto& buffer_barrier : buffer_barriers) {
-          buffer_barrier.srcAccessMask = 0;
-          buffer_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        }
+      VkDescriptorSet descriptor = descriptors_[frame_index].gaussian;
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              compute_pipeline_layout_, 1, 1, &descriptor, 0,
+                              NULL);
 
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, NULL,
-                             buffer_barriers.size(), buffer_barriers.data(), 0,
-                             NULL);
+      descriptor = descriptors_[frame_index].ply;
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                              compute_pipeline_layout_, 3, 1, &descriptor, 0,
+                              NULL);
 
-        // parse ply file
-        // TODO: make parse async
-        descriptors_[frame_index].ply.Update(0, progress.ply_buffer, 0);
+      constexpr int local_size = 256;
+      vkCmdDispatch(cb, (loaded_point_count_ + local_size - 1) / local_size, 1,
+                    1);
 
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          parse_ply_pipeline_);
+      barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier,
+                           0, NULL, 0, NULL);
 
-        VkDescriptorSet descriptor = descriptors_[frame_index].gaussian;
+      // hold buffer until the end of frame
+      frame_info.ply_buffer = progress.ply_buffer;
+    }
+
+    if (loaded_point_count_ != 0) {
+      // rank
+      {
+        vkCmdFillBuffer(cb, splat_visible_point_count_, 0, sizeof(uint32_t), 0);
+
+        barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                             &barrier, 0, NULL, 0, NULL);
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rank_pipeline_);
+
+        std::vector<VkDescriptorSet> descriptors = {
+            descriptors_[frame_index].camera,
+            descriptors_[frame_index].gaussian,
+            descriptors_[frame_index].splat_instance,
+        };
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                compute_pipeline_layout_, 1, 1, &descriptor, 0,
-                                NULL);
+                                compute_pipeline_layout_, 0, descriptors.size(),
+                                descriptors.data(), 0, nullptr);
 
-        descriptor = descriptors_[frame_index].ply;
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                compute_pipeline_layout_, 3, 1, &descriptor, 0,
-                                NULL);
+        vkCmdPushConstants(cb, compute_pipeline_layout_,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
+                           glm::value_ptr(model));
+
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            timestamp_query_pool, 1);
 
         constexpr int local_size = 256;
         vkCmdDispatch(cb, (loaded_point_count_ + local_size - 1) / local_size,
                       1, 1);
 
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            timestamp_query_pool, 2);
+      }
+
+      // make visiblePointCount available for next transfer commands
+      {
+        barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0,
+                             NULL, 0, NULL);
+      }
+
+      // visible point count to CPU
+      {
+        VkBufferCopy region = {};
+        region.srcOffset = 0;
+        region.dstOffset = sizeof(uint32_t) * frame_index;
+        region.size = sizeof(uint32_t);
+        vkCmdCopyBuffer(cb, splat_visible_point_count_,
+                        visible_point_count_cpu_buffer_, 1, &region);
+      }
+
+      // radix sort
+      {
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            timestamp_query_pool, 3);
+
+        vrdxCmdSortKeyValueIndirect(cb, sorter_, loaded_point_count_,
+                                    splat_visible_point_count_, 0,
+                                    splat_storage_.key, 0, splat_storage_.index,
+                                    0, sort_storage_, 0, NULL, 0);
+
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            timestamp_query_pool, 4);
+      }
+
+      // inverse map
+      {
+        vkCmdFillBuffer(cb, splat_storage_.inverse_index, 0,
+                        loaded_point_count_ * sizeof(uint32_t), -1);
+
+        barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask =
+            VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask =
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                             &barrier, 0, NULL, 0, NULL);
+
+        std::vector<VkDescriptorSet> descriptors = {
+            descriptors_[frame_index].camera,
+            descriptors_[frame_index].gaussian,
+            descriptors_[frame_index].splat_instance,
+        };
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                compute_pipeline_layout_, 0, descriptors.size(),
+                                descriptors.data(), 0, nullptr);
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          inverse_index_pipeline_);
+
+        vkCmdPushConstants(cb, compute_pipeline_layout_,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
+                           glm::value_ptr(model));
+
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            timestamp_query_pool, 5);
+
+        constexpr int local_size = 256;
+        vkCmdDispatch(cb, (loaded_point_count_ + local_size - 1) / local_size,
+                      1, 1);
+
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            timestamp_query_pool, 6);
+      }
+
+      // projection
+      {
         barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -1482,313 +1444,376 @@ class Engine::Impl {
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
                              &barrier, 0, NULL, 0, NULL);
 
-        // hold buffer until the end of frame
-        frame_info.ply_buffer = progress.ply_buffer;
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          projection_pipeline_);
+
+        vkCmdPushConstants(cb, compute_pipeline_layout_,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
+                           glm::value_ptr(model));
+
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            timestamp_query_pool, 7);
+
+        constexpr int local_size = 256;
+        vkCmdDispatch(cb, (loaded_point_count_ + local_size - 1) / local_size,
+                      1, 1);
+
+        vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            timestamp_query_pool, 8);
       }
 
-      if (loaded_point_count_ != 0) {
-        // rank
-        {
-          vkCmdFillBuffer(cb, splat_visible_point_count_, 0, sizeof(uint32_t),
-                          0);
+      // draw
+      {
+        barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
+                                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                                 VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                             0, 1, &barrier, 0, NULL, 0, NULL);
 
-          barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-          barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-          barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
-                               &barrier, 0, NULL, 0, NULL);
-
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rank_pipeline_);
-
-          std::vector<VkDescriptorSet> descriptors = {
-              descriptors_[frame_index].camera,
-              descriptors_[frame_index].gaussian,
-              descriptors_[frame_index].splat_instance,
-          };
-          vkCmdBindDescriptorSets(
-              cb, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout_, 0,
-              descriptors.size(), descriptors.data(), 0, nullptr);
-
-          vkCmdPushConstants(cb, compute_pipeline_layout_,
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
-                             glm::value_ptr(model));
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              timestamp_query_pool, 1);
-
-          constexpr int local_size = 256;
-          vkCmdDispatch(cb, (loaded_point_count_ + local_size - 1) / local_size,
-                        1, 1);
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              timestamp_query_pool, 2);
-        }
-
-        // make visiblePointCount available for next transfer commands
-        {
-          barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-          barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-          barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier,
-                               0, NULL, 0, NULL);
-        }
-
-        // visible point count to CPU
-        {
-          VkBufferCopy region = {};
-          region.srcOffset = 0;
-          region.dstOffset = sizeof(uint32_t) * frame_index;
-          region.size = sizeof(uint32_t);
-          vkCmdCopyBuffer(cb, splat_visible_point_count_,
-                          visible_point_count_cpu_buffer_, 1, &region);
-        }
-
-        // radix sort
-        {
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              timestamp_query_pool, 3);
-
-          vrdxCmdSortKeyValueIndirect(
-              cb, sorter_, loaded_point_count_, splat_visible_point_count_, 0,
-              splat_storage_.key, 0, splat_storage_.index, 0, sort_storage_, 0,
-              NULL, 0);
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              timestamp_query_pool, 4);
-        }
-
-        // inverse map
-        {
-          vkCmdFillBuffer(cb, splat_storage_.inverse_index, 0,
-                          loaded_point_count_ * sizeof(uint32_t), -1);
-
-          barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-          barrier.srcAccessMask =
-              VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-          barrier.dstAccessMask =
-              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-          vkCmdPipelineBarrier(cb,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                   VK_PIPELINE_STAGE_TRANSFER_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
-                               &barrier, 0, NULL, 0, NULL);
-
-          std::vector<VkDescriptorSet> descriptors = {
-              descriptors_[frame_index].camera,
-              descriptors_[frame_index].gaussian,
-              descriptors_[frame_index].splat_instance,
-          };
-          vkCmdBindDescriptorSets(
-              cb, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout_, 0,
-              descriptors.size(), descriptors.data(), 0, nullptr);
-
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            inverse_index_pipeline_);
-
-          vkCmdPushConstants(cb, compute_pipeline_layout_,
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
-                             glm::value_ptr(model));
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              timestamp_query_pool, 5);
-
-          constexpr int local_size = 256;
-          vkCmdDispatch(cb, (loaded_point_count_ + local_size - 1) / local_size,
-                        1, 1);
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              timestamp_query_pool, 6);
-        }
-
-        // projection
-        {
-          barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-          barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-          barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
-                               &barrier, 0, NULL, 0, NULL);
-
-          vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            projection_pipeline_);
-
-          vkCmdPushConstants(cb, compute_pipeline_layout_,
-                             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(model),
-                             glm::value_ptr(model));
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              timestamp_query_pool, 7);
-
-          constexpr int local_size = 256;
-          vkCmdDispatch(cb, (loaded_point_count_ + local_size - 1) / local_size,
-                        1, 1);
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              timestamp_query_pool, 8);
-        }
-
-        // draw
-        {
-          barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-          barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-          barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
-                                  VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
-          vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                               VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
-                                   VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-                               0, 1, &barrier, 0, NULL, 0, NULL);
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              timestamp_query_pool, 9);
-
-          // DrawNormalPass(cb, frame_index, swapchain_.width(),
-          //                swapchain_.height(),
-          //                swapchain_.image_view(image_index));
-          DrawNormalPass(cb, frame_index, swapchain_.width(),
-                         swapchain_.height(), offscreen_image_view_);
-
-          vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                              timestamp_query_pool, 10);
-        }
-        frame_info.drew_splats = true;
-      } else {
         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                             timestamp_query_pool, 9);
 
-        DrawNormalPass(cb, frame_index, swapchain_.width(), swapchain_.height(),
-                       offscreen_image_view_);
+        // DrawNormalPass(cb, frame_index, swapchain_.width(),
+        //                swapchain_.height(),
+        //                swapchain_.image_view(image_index));
+        DrawNormalPass(cb, frame_index, width_, height_, offscreen_image_view_);
 
         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
                             timestamp_query_pool, 10);
-        frame_info.drew_splats = false;
       }
+      frame_info.drew_splats = true;
+    } else {
+      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          timestamp_query_pool, 9);
 
-      // Transition the offscreen image layout to
-      // // VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-      TransitionImageLayout(cb, offscreen_image_,
-                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+      DrawNormalPass(cb, frame_index, width_, height_, offscreen_image_view_);
 
-      // Transition the swapchain image layout to
-      // // VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
-      TransitionImageLayout(cb, swapchain_.image(image_index),
-                            VK_IMAGE_LAYOUT_UNDEFINED,
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
+                          timestamp_query_pool, 10);
+      frame_info.drew_splats = false;
+    }
+    // // Transition the offscreen image layout to
+    // // // VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+    // TransitionImageLayout(cb, offscreen_image_,
+    //                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    //                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
-      // Copy the offscreen image to the swapchain image
-      VkImageCopy copy_region = {};
-      copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-      copy_region.srcSubresource.mipLevel = 0;
-      copy_region.srcSubresource.baseArrayLayer = 0;
-      copy_region.srcSubresource.layerCount = 1;
-      copy_region.srcOffset = {0, 0, 0};
-      copy_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-      copy_region.dstSubresource.mipLevel = 0;
-      copy_region.dstSubresource.baseArrayLayer = 0;
-      copy_region.dstSubresource.layerCount = 1;
-      copy_region.dstOffset = {0, 0, 0};
-      copy_region.extent.width = width_;
-      copy_region.extent.height = height_;
-      copy_region.extent.depth = 1;
+    // // Transition the swapchain image layout to
+    // // // VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+    // TransitionImageLayout(cb, swapchain_.image(image_index),
+    //                       VK_IMAGE_LAYOUT_UNDEFINED,
+    //                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-      vkCmdCopyImage(cb, offscreen_image_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                     swapchain_.image(image_index),
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+    // // Copy the offscreen image to the swapchain image
+    // VkImageCopy copy_region = {};
+    // copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    // copy_region.srcSubresource.mipLevel = 0;
+    // copy_region.srcSubresource.baseArrayLayer = 0;
+    // copy_region.srcSubresource.layerCount = 1;
+    // copy_region.srcOffset = {0, 0, 0};
+    // copy_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    // copy_region.dstSubresource.mipLevel = 0;
+    // copy_region.dstSubresource.baseArrayLayer = 0;
+    // copy_region.dstSubresource.layerCount = 1;
+    // copy_region.dstOffset = {0, 0, 0};
+    // copy_region.extent.width = width_;
+    // copy_region.extent.height = height_;
+    // copy_region.extent.depth = 1;
 
-      // Transition the swapchain image layout to
-      // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-      TransitionImageLayout(cb, swapchain_.image(image_index),
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-      vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                          timestamp_query_pool, 11);
+    // vkCmdCopyImage(cb, offscreen_image_,
+    // VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    //                swapchain_.image(image_index),
+    //                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
 
-      vkEndCommandBuffer(cb);
+    // // Transition the swapchain image layout to
+    // // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    // TransitionImageLayout(cb, swapchain_.image(image_index),
+    //                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    //                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    // vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+    //                     timestamp_query_pool, 11);
 
-      std::vector<VkSemaphore> wait_semaphores = {image_acquired_semaphore,
-                                                  transfer_semaphore_};
-      std::vector<VkPipelineStageFlags> wait_stages = {
-          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT};
-      std::vector<uint64_t> wait_values = {0, transfer_timeline_};
+    vkEndCommandBuffer(cb);
 
-      VkTimelineSemaphoreSubmitInfo timeline_semaphore_submit_info = {
-          VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-      timeline_semaphore_submit_info.waitSemaphoreValueCount =
-          wait_values.size();
-      timeline_semaphore_submit_info.pWaitSemaphoreValues = wait_values.data();
+    std::vector<VkSemaphore> wait_semaphores = {transfer_semaphore_};
+    std::vector<VkPipelineStageFlags> wait_stages = {
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT};
+    std::vector<uint64_t> wait_values = {0, transfer_timeline_};
 
-      VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
-      submit_info.pNext = &timeline_semaphore_submit_info;
-      submit_info.waitSemaphoreCount = wait_semaphores.size();
-      submit_info.pWaitSemaphores = wait_semaphores.data();
-      submit_info.pWaitDstStageMask = wait_stages.data();
-      submit_info.commandBufferCount = 1;
-      submit_info.pCommandBuffers = &cb;
-      submit_info.signalSemaphoreCount = 1;
-      submit_info.pSignalSemaphores = &render_finished_semaphore;
-      vkQueueSubmit(context_.graphics_queue(), 1, &submit_info,
-                    render_finished_fence);
+    VkTimelineSemaphoreSubmitInfo timeline_semaphore_submit_info = {
+        VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+    timeline_semaphore_submit_info.waitSemaphoreValueCount = wait_values.size();
+    timeline_semaphore_submit_info.pWaitSemaphoreValues = wait_values.data();
 
-      VkSwapchainKHR swapchain_handle = swapchain_;
-      VkPresentInfoKHR present_info = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-      present_info.waitSemaphoreCount = 1;
-      present_info.pWaitSemaphores = &render_finished_semaphore;
-      present_info.swapchainCount = 1;
-      present_info.pSwapchains = &swapchain_handle;
-      present_info.pImageIndices = &image_index;
-      frame_info.present_timestamp = Clock::timestamp();
-      vkQueuePresentKHR(context_.graphics_queue(), &present_info);
-      frame_info.present_done_timestamp = Clock::timestamp();
+    VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit_info.pNext = &timeline_semaphore_submit_info;
+    submit_info.waitSemaphoreCount = 0;
+    submit_info.pWaitSemaphores = NULL;
+    submit_info.pWaitDstStageMask = wait_stages.data();
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &cb;
+    submit_info.signalSemaphoreCount = 0;
+    submit_info.pSignalSemaphores = NULL;  //&render_finished_semaphore;
+    vkQueueSubmit(context_.graphics_queue(), 1, &submit_info,
+                  render_finished_fence);
 
-      frame_counter_++;
+    // VkSwapchainKHR swapchain_handle = swapchain_;
+    // VkPresentInfoKHR present_info = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    // present_info.waitSemaphoreCount = 1;
+    // present_info.pWaitSemaphores = &render_finished_semaphore;
+    // present_info.swapchainCount = 1;
+    // present_info.pSwapchains = &swapchain_handle;
+    // present_info.pImageIndices = &image_index;
+    // frame_info.present_timestamp = Clock::timestamp();
+    // vkQueuePresentKHR(context_.graphics_queue(), &present_info);
+    frame_info.present_done_timestamp = Clock::timestamp();
 
-      if (msaa_changed || depth_format_changed) {
-        if (msaa == 0) {
-          samples_ = VK_SAMPLE_COUNT_1_BIT;
-        } else if (msaa == 1) {
-          samples_ = VK_SAMPLE_COUNT_2_BIT;
-        } else if (msaa == 2) {
-          samples_ = VK_SAMPLE_COUNT_4_BIT;
+    frame_counter_++;
+    vkQueueWaitIdle(context_.graphics_queue());
+  }
+
+  void FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data) {
+    VkResult err;
+
+    VkSemaphore image_acquired_semaphore =
+        wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
+    VkSemaphore render_complete_semaphore =
+        wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
+    err = vkAcquireNextImageKHR(context_.device(), wd->Swapchain, UINT64_MAX,
+                                image_acquired_semaphore, VK_NULL_HANDLE,
+                                &wd->FrameIndex);
+    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
+      swapchain_rebuild_ = true;
+
+      return;
+    }
+    check_vk_result(err);
+
+    ImGui_ImplVulkanH_Frame* fd = &wd->Frames[wd->FrameIndex];
+    {
+      err = vkWaitForFences(
+          context_.device(), 1, &fd->Fence, VK_TRUE,
+          UINT64_MAX);  // wait indefinitely instead of periodically checking
+      check_vk_result(err);
+
+      err = vkResetFences(context_.device(), 1, &fd->Fence);
+      check_vk_result(err);
+    }
+    {
+      err = vkResetCommandPool(context_.device(), fd->CommandPool, 0);
+      check_vk_result(err);
+      VkCommandBufferBeginInfo info = {};
+      info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+      info.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+      err = vkBeginCommandBuffer(fd->CommandBuffer, &info);
+      check_vk_result(err);
+    }
+    {
+      VkRenderPassBeginInfo info = {};
+      info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+      info.renderPass = wd->RenderPass;
+      info.framebuffer = fd->Framebuffer;
+      info.renderArea.extent.width = wd->Width;
+      info.renderArea.extent.height = wd->Height;
+      info.clearValueCount = 1;
+      info.pClearValues = &wd->ClearValue;
+      vkCmdBeginRenderPass(fd->CommandBuffer, &info,
+                           VK_SUBPASS_CONTENTS_INLINE);
+    }
+
+    // Record dear imgui primitives into command buffer
+    ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer);
+
+    // Submit command buffer
+    vkCmdEndRenderPass(fd->CommandBuffer);
+    {
+      VkPipelineStageFlags wait_stage =
+          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+      VkSubmitInfo info = {};
+      info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+      info.waitSemaphoreCount = 1;
+      info.pWaitSemaphores = &image_acquired_semaphore;
+      info.pWaitDstStageMask = &wait_stage;
+      info.commandBufferCount = 1;
+      info.pCommandBuffers = &fd->CommandBuffer;
+      info.signalSemaphoreCount = 1;
+      info.pSignalSemaphores = &render_complete_semaphore;
+
+      err = vkEndCommandBuffer(fd->CommandBuffer);
+      check_vk_result(err);
+      err = vkQueueSubmit(context_.graphics_queue(), 1, &info, fd->Fence);
+      check_vk_result(err);
+    }
+  }
+
+  void FramePresent(ImGui_ImplVulkanH_Window* wd) {
+    if (swapchain_rebuild_) return;
+    VkSemaphore render_complete_semaphore =
+        wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
+    VkPresentInfoKHR info = {};
+    info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    info.waitSemaphoreCount = 1;
+    info.pWaitSemaphores = &render_complete_semaphore;
+    info.swapchainCount = 1;
+    info.pSwapchains = &wd->Swapchain;
+    info.pImageIndices = &wd->FrameIndex;
+    VkResult err = vkQueuePresentKHR(context_.graphics_queue(), &info);
+    if (err == VK_ERROR_OUT_OF_DATE_KHR || err == VK_SUBOPTIMAL_KHR) {
+      swapchain_rebuild_ = true;
+      return;
+    }
+    check_vk_result(err);
+    wd->SemaphoreIndex =
+        (wd->SemaphoreIndex + 1) %
+        wd->SemaphoreCount;  // Now we can use the next set of semaphores
+  }
+
+  void RenderUI() {
+    // Resize swap chain?
+    // int fb_width, fb_height;
+    // glfwGetFramebufferSize(window, &fb_width, &fb_height);
+    // if (fb_width > 0 && fb_height > 0 &&
+    //     (g_SwapChainRebuild || g_MainWindowData.Width != fb_width ||
+    //      g_MainWindowData.Height != fb_height)) {
+    //   ImGui_ImplVulkan_SetMinImageCount(g_MinImageCount);
+    //   ImGui_ImplVulkanH_CreateOrResizeWindow(
+    //       g_Instance, g_PhysicalDevice, g_Device, &g_MainWindowData,
+    //       g_QueueFamily, g_Allocator, fb_width, fb_height,
+    //       g_MinImageCount);
+    //   g_MainWindowData.FrameIndex = 0;
+    //   g_SwapChainRebuild = false;
+    // }
+    // if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0) {
+    //   ImGui_ImplGlfw_Sleep(10);
+    //   continue;
+    // }
+
+    // Start the Dear ImGui frame
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    const auto& io = ImGui::GetIO();
+    if (!io.WantCaptureKeyboard) {
+      constexpr float speed = 1000.f;
+      float dt = io.DeltaTime;
+      if (ImGui::IsKeyDown(ImGuiKey_W)) {
+        camera_.Translate(0.f, 0.f, speed * dt);
+      }
+      if (ImGui::IsKeyDown(ImGuiKey_S)) {
+        camera_.Translate(0.f, 0.f, -speed * dt);
+      }
+      if (ImGui::IsKeyDown(ImGuiKey_A)) {
+        camera_.Translate(-speed * dt, 0.f);
+      }
+      if (ImGui::IsKeyDown(ImGuiKey_D)) {
+        camera_.Translate(speed * dt, 0.f);
+      }
+      if (ImGui::IsKeyDown(ImGuiKey_Space)) {
+        camera_.Translate(0.f, speed * dt);
+      }
+    }
+    if (ImGui::BeginMainMenuBar()) {
+      if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Add")) {
+        }
+        if (ImGui::MenuItem("Open", "Ctrl+O")) {
+        }
+        if (ImGui::MenuItem("Load Trajectory")) {
+          // loadTrajectory();
+        }
+        if (ImGui::MenuItem("Save", "Ctrl+S")) {
+        }
+        if (ImGui::MenuItem("Save as..")) {
+        }
+        ImGui::EndMenu();
+      }
+      ImGui::EndMainMenuBar();
+    }
+    // ImGui::DockSpaceOverViewport();
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGuiID dockspace_id = ImGui::GetID("MyDockspace");
+    ImGui::DockSpaceOverViewport(dockspace_id, viewport,
+                                 ImGuiDockNodeFlags_PassthruCentralNode);
+    {
+      ImGui::Begin("Hello, world!");  // Create a window called "Hello, world!"
+                                      // and append into it.
+
+      ImGui::Text("This is some useful text.");  // Display some text (you can
+                                                 // use a format strings too)
+
+      // ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f /
+      // io.Framerate, io.Framerate);
+      ImGui::End();
+    }
+    {
+      // // Set initial docking position
+      // ImGuiID dockspace_id = ImGui::GetID("MyDockspace");
+      // ImGui::DockSpace(dockspace_id);
+
+      // ImGui::SetNextWindowDockID(dockspace_id, ImGuiCond_FirstUseEver);
+      ImGui::Begin("Viewport");
+
+      // handle events
+      if (!io.WantCaptureMouse) {
+        bool left = io.MouseDown[ImGuiMouseButton_Left];
+        bool right = io.MouseDown[ImGuiMouseButton_Right];
+        float dx = io.MouseDelta.x;
+        float dy = io.MouseDelta.y;
+
+        if (left && !right) {
+          camera_.Rotate(dx, dy);
+        } else if (!left && right) {
+          camera_.Translate(dx, dy);
+        } else if (left && right) {
+          camera_.Zoom(dy);
         }
 
-        switch (depth_format) {
-          case 0:
-            depth_format_ = VK_FORMAT_D16_UNORM;
-            break;
-
-          case 1:
-            depth_format_ = VK_FORMAT_D32_SFLOAT;
-            break;
+        if (io.MouseWheel != 0.f) {
+          if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl)) {
+            camera_.DollyZoom(io.MouseWheel);
+          } else {
+            camera_.Zoom(io.MouseWheel * 10.f);
+          }
         }
-
-        ImGui_ImplVulkan_InitInfo init_info = {};
-        init_info.Instance = context_.instance();
-        init_info.PhysicalDevice = context_.physical_device();
-        init_info.Device = context_.device();
-        init_info.QueueFamily = context_.graphics_queue_family_index();
-        init_info.Queue = context_.graphics_queue();
-        init_info.PipelineCache = context_.pipeline_cache();
-        init_info.DescriptorPool = context_.descriptor_pool();
-        init_info.Subpass = 0;
-        init_info.MinImageCount = 3;
-        init_info.ImageCount = 3;
-        init_info.Allocator = VK_NULL_HANDLE;
-        init_info.CheckVkResultFn = check_vk_result;
-        init_info.RenderPass = render_pass_;
-        init_info.MSAASamples = samples_;
-
-        // wait for all presentations submitted, before recreate imgui vulkan
-        vkWaitForFences(context_.device(), render_finished_fences_.size(),
-                        render_finished_fences_.data(), VK_TRUE, UINT64_MAX);
-
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplVulkan_Init(&init_info);
-
-        RecreateFramebuffer();
       }
+
+      ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
+      float aspectRatio = static_cast<float>(width_) / height_;
+      float newWidth = viewportPanelSize.x;
+      float newHeight = viewportPanelSize.x / aspectRatio;
+
+      if (newHeight > viewportPanelSize.y) {
+        newHeight = viewportPanelSize.y;
+        newWidth = viewportPanelSize.y * aspectRatio;
+      }
+
+      ImVec2 offset = {(viewportPanelSize.x - newWidth) * 0.5f,
+                       (viewportPanelSize.y - newHeight) * 0.5f};
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset.x);
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offset.y);
+
+      ImGui::Image((ImTextureID)(intptr_t)offscreen_descriptor_set_,
+                   ImVec2{newWidth, newHeight});
+      ImGui::End();
+    }
+
+    ImGui::Render();
+    ImDrawData* draw_data = ImGui::GetDrawData();
+    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+    const bool is_minimized =
+        (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f);
+    if (!is_minimized) {
+      main_window_.ClearValue.color.float32[0] = clear_color.x * clear_color.w;
+      main_window_.ClearValue.color.float32[1] = clear_color.y * clear_color.w;
+      main_window_.ClearValue.color.float32[2] = clear_color.z * clear_color.w;
+      main_window_.ClearValue.color.float32[3] = clear_color.w;
+      FrameRender(&main_window_, draw_data);
+      FramePresent(&main_window_);
     }
   }
 
@@ -1921,40 +1946,37 @@ class Engine::Impl {
       }
     }
 
-    // draw ui
-    ImDrawData* draw_data = ImGui::GetDrawData();
-    ImGui_ImplVulkan_RenderDrawData(draw_data, cb);
-
     vkCmdEndRenderPass(cb);
   }
 
-  void RecreateFramebuffer() {
-    color_attachment_ =
-        vk::Attachment(context_, swapchain_.width(), swapchain_.height(),
-                       VK_FORMAT_B8G8R8A8_UNORM, samples_, false);
-    depth_attachment_ =
-        vk::Attachment(context_, swapchain_.width(), swapchain_.height(),
-                       depth_format_, samples_, false);
+  void createFramebuffer() {
+    color_attachment_ = vk::Attachment(
+        context_, width_, height_, VK_FORMAT_B8G8R8A8_UNORM, samples_, false);
+    depth_attachment_ = vk::Attachment(context_, width_, height_, depth_format_,
+                                       samples_, false);
 
     vk::FramebufferCreateInfo framebuffer_info;
-    framebuffer_info.width = swapchain_.width();
-    framebuffer_info.height = swapchain_.height();
+    framebuffer_info.width = width_;
+    framebuffer_info.height = height_;
     framebuffer_info.render_pass = render_pass_;
 
-    // if (samples_ == VK_SAMPLE_COUNT_1_BIT) {
     framebuffer_info.image_specs = {
-        swapchain_.image_spec(),
+        color_attachment_.image_spec(),
         depth_attachment_.image_spec(),
     };
-    // } else {
-    //   framebuffer_info.image_specs = {
-    //       color_attachment_.image_spec(),
-    //       depth_attachment_.image_spec(),
-    //       swapchain_.image_spec(),
-    //   };
-    // }
 
     framebuffer_ = vk::Framebuffer(context_, framebuffer_info);
+
+    // vk::FramebufferCreateInfo imgui_framebuffer_info;
+    // imgui_framebuffer_info.width = widt;
+    // imgui_framebuffer_info.height = swapchain_.height();
+    // imgui_framebuffer_info.render_pass = imgui_render_pass_;
+
+    // imgui_framebuffer_info.image_specs = {
+    //     swapchain_.image_spec(),
+    // };
+
+    // imgui_framebuffer_ = vk::Framebuffer(context_, imgui_framebuffer_info);
 
     VkImageCreateInfo image_info = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     image_info.imageType = VK_IMAGE_TYPE_2D;
@@ -1993,6 +2015,7 @@ class Engine::Impl {
                           &offscreen_image_view_) != VK_SUCCESS) {
       throw std::runtime_error("failed to create offscreen image view!");
     }
+
     // Define the descriptor set layout bindings
     VkDescriptorSetLayoutBinding layout_binding = {};
     layout_binding.binding = 0;
@@ -2074,7 +2097,8 @@ class Engine::Impl {
     VkWriteDescriptorSet write_descriptor = {};
     write_descriptor.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write_descriptor.dstSet =
-        offscreen_descriptor_set_;  // Assuming you have an ImGui descriptor set
+        offscreen_descriptor_set_;  // Assuming you have an
+                                    // ImGui descriptor set
     write_descriptor.dstBinding = 0;
     write_descriptor.dstArrayElement = 0;
     write_descriptor.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -2098,9 +2122,10 @@ class Engine::Impl {
   SplatRenderMode splat_render_mode_ = SplatRenderMode::TriangleList;
 
   Camera camera_;
-
+  ImGui_ImplVulkanH_Window main_window_;
+  bool swapchain_rebuild_ = false;
   vk::Context context_;
-  vk::Swapchain swapchain_;
+  // vk::Swapchain swapchain_;
 
   VkImage offscreen_image_;
   VmaAllocation offscreen_image_allocation_ = VK_NULL_HANDLE;
@@ -2135,6 +2160,9 @@ class Engine::Impl {
   // normal pass
   vk::Framebuffer framebuffer_;
   vk::RenderPass render_pass_;
+  // VkRenderPass imgui_render_pass_;
+  // VkFramebuffer imgui_framebuffer_;
+
   vk::GraphicsPipeline color_line_pipeline_;
   vk::GraphicsPipeline splat_pipeline_;
   vk::GraphicsPipeline splat_geom_pipeline_;

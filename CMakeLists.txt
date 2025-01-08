@@ -14,6 +14,8 @@ add_subdirectory(third_party/argparse EXCLUDE_FROM_ALL)
 
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # shaders
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/generated)
 
@@ -44,7 +46,8 @@ endfunction()
 
 # vkgs
 add_library(vkgs SHARED
-  src/vkgs/scene/camera.cc
+  src/vkgs/scene/spectator_camera.cc
+  src/vkgs/scene/camera_sensor.cc
   src/vkgs/engine/engine.cc
   src/vkgs/engine/splat_load_thread.cc
   src/vkgs/engine/vulkan/attachment.cc

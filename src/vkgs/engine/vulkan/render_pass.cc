@@ -20,7 +20,7 @@ class RenderPass::Impl {
       attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
       attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
       attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+      attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
       attachments[1] = {VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2};
       attachments[1].format = depth_format;
@@ -63,7 +63,7 @@ class RenderPass::Impl {
       attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
       attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
       attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-      attachments[2].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+      attachments[2].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       //   attachments[2].finalLayout =
       //   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }

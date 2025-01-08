@@ -128,6 +128,8 @@ class Engine::Impl {
         // render pass
         render_pass_ = vk::RenderPass(context_, samples_, depth_format_);
 
+        render_pass_second_camera_ = vk::RenderPass(context_, samples_, depth_format_);
+
         {
             vk::DescriptorLayoutCreateInfo descriptor_layout_info = {};
             descriptor_layout_info.bindings.resize(1);
@@ -137,6 +139,18 @@ class Engine::Impl {
             descriptor_layout_info.bindings[0].stage_flags =
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
             camera_descriptor_layout_ = vk::DescriptorLayout(context_, descriptor_layout_info);
+        }
+
+        {
+            vk::DescriptorLayoutCreateInfo descriptor_layout_info = {};
+            descriptor_layout_info.bindings.resize(1);
+            descriptor_layout_info.bindings[0] = {};
+            descriptor_layout_info.bindings[0].binding = 0;
+            descriptor_layout_info.bindings[0].descriptor_type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptor_layout_info.bindings[0].stage_flags =
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+            second_camera_descriptor_layout_ =
+                vk::DescriptorLayout(context_, descriptor_layout_info);
         }
 
         {
@@ -420,12 +434,19 @@ class Engine::Impl {
 
         // uniforms and descriptors
         camera_buffer_ = vk::UniformBuffer<vk::shader::Camera>(context_, 2);
+        camera_buffer_second_camera_ = vk::UniformBuffer<vk::shader::Camera>(context_, 2);
+
         visible_point_count_cpu_buffer_ = vk::CpuBuffer(context_, 2 * sizeof(uint32_t));
         descriptors_.resize(2);
         for (int i = 0; i < 2; ++i) {
             descriptors_[i].camera = vk::Descriptor(context_, camera_descriptor_layout_);
             descriptors_[i].camera.Update(0, camera_buffer_, camera_buffer_.offset(i),
                                           camera_buffer_.element_size());
+            descriptors_[i].second_camera =
+                vk::Descriptor(context_, second_camera_descriptor_layout_);
+            descriptors_[i].second_camera.Update(0, camera_buffer_second_camera_,
+                                                 camera_buffer_second_camera_.offset(i),
+                                                 camera_buffer_second_camera_.element_size());
 
             descriptors_[i].gaussian = vk::Descriptor(context_, gaussian_descriptor_layout_);
             descriptors_[i].splat_instance = vk::Descriptor(context_, instance_layout_);
@@ -699,6 +720,10 @@ class Engine::Impl {
         // create window
         width_ = 1920;
         height_ = 1080;
+        camera_.SetRenderSize(width_, height_);
+        camera_sensor_.SetRenderSize(width_, height_);
+        camera_sensor_.SetFov(120.0f);
+
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
         window_ = glfwCreateWindow(width_, height_, "vkgs", NULL, NULL);
@@ -790,7 +815,6 @@ class Engine::Impl {
 
             int width, height;
             glfwGetFramebufferSize(window_, &width, &height);
-            camera_.SetWindowSize(width, height);
 
             if (follow_trajectory_ && frame_counter_ % 100 == 0 && !trajectory_matrices_.empty()) {
                 static size_t trajectory_index = 0;
@@ -1347,10 +1371,9 @@ class Engine::Impl {
                 vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, timestamp_query_pool,
                                     9);
 
-                // DrawNormalPass(cb, frame_index, swapchain_.width(),
-                //                swapchain_.height(),
-                //                swapchain_.image_view(image_index));
                 DrawNormalPass(cb, frame_index, width_, height_, color_attachment_);
+                DrawNormalPassCam2(cb, frame_index, width_, height_,
+                                   color_attachment_second_camera_);
 
                 vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, timestamp_query_pool,
                                     10);
@@ -1661,7 +1684,28 @@ class Engine::Impl {
                          ImVec2{newWidth, newHeight});
             ImGui::End();
         }
+        {
+            ImGui::Begin("Second Camera");
 
+            ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
+            float aspectRatio = static_cast<float>(width_) / height_;
+            float newWidth = viewportPanelSize.x;
+            float newHeight = viewportPanelSize.x / aspectRatio;
+
+            if (newHeight > viewportPanelSize.y) {
+                newHeight = viewportPanelSize.y;
+                newWidth = viewportPanelSize.y * aspectRatio;
+            }
+
+            ImVec2 offset = {(viewportPanelSize.x - newWidth) * 0.5f,
+                             (viewportPanelSize.y - newHeight) * 0.5f};
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offset.x);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offset.y);
+
+            ImGui::Image((ImTextureID)(intptr_t)color_attachment_second_camera_.getDescriptorSet(),
+                         ImVec2{newWidth, newHeight});
+            ImGui::End();
+        }
         ImGui::Render();
         ImDrawData* draw_data = ImGui::GetDrawData();
         ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
@@ -1797,6 +1841,86 @@ class Engine::Impl {
 
         vkCmdEndRenderPass(cb);
     }
+    void DrawNormalPassCam2(VkCommandBuffer cb, uint32_t frame_index, uint32_t width,
+                            uint32_t height, VkImageView target_image_view) {
+        if (target_image_view == nullptr) {
+            throw std::runtime_error("target_image_view is null!");
+        }
+        std::vector<VkClearValue> clear_values(2);
+        clear_values[0].color.float32[0] = 0.0f;
+        clear_values[0].color.float32[1] = 0.0f;
+        clear_values[0].color.float32[2] = 0.0f;
+        clear_values[0].color.float32[3] = 1.f;
+        clear_values[1].depthStencil.depth = 1.f;
+
+        std::vector<VkImageView> render_pass_attachments;
+
+        render_pass_attachments = {
+            target_image_view,
+            depth_attachment_second_camera_,
+        };
+
+        VkRenderPassAttachmentBeginInfo render_pass_attachments_info = {
+            VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO};
+        VkRenderPassBeginInfo render_pass_begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        render_pass_begin_info.pNext = &render_pass_attachments_info;
+        render_pass_begin_info.framebuffer = framebuffer_second_camera_;
+        render_pass_begin_info.renderArea.offset = {0, 0};
+        render_pass_begin_info.renderArea.extent = {width, height};
+        render_pass_begin_info.clearValueCount = clear_values.size();
+        render_pass_begin_info.pClearValues = clear_values.data();
+        render_pass_begin_info.renderPass = render_pass_second_camera_;
+        render_pass_attachments_info.attachmentCount = render_pass_attachments.size();
+        render_pass_attachments_info.pAttachments = render_pass_attachments.data();
+
+        vkCmdBeginRenderPass(cb, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport viewport = {};
+        viewport.x = 0.f;
+        viewport.y = 0.f;
+        viewport.width = static_cast<float>(width);
+        viewport.height = static_cast<float>(height);
+        viewport.minDepth = 0.f;
+        viewport.maxDepth = 1.f;
+        vkCmdSetViewport(cb, 0, 1, &viewport);
+
+        VkRect2D scissor = {};
+        scissor.offset = {0, 0};
+        scissor.extent = {width, height};
+        vkCmdSetScissor(cb, 0, 1, &scissor);
+
+        std::vector<VkDescriptorSet> descriptors = {
+            descriptors_[frame_index].camera,
+            descriptors_[frame_index].splat_instance,
+        };
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_layout_, 0,
+                                descriptors.size(), descriptors.data(), 0, nullptr);
+
+        // draw splat
+        if (loaded_point_count_ != 0) {
+            switch (splat_render_mode_) {
+                case SplatRenderMode::TriangleList: {
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, splat_pipeline_);
+
+                    vkCmdBindIndexBuffer(cb, splat_index_buffer_, 0, VK_INDEX_TYPE_UINT32);
+
+                    vkCmdDrawIndexedIndirect(cb, splat_draw_indirect_, 0, 1, 0);
+                } break;
+
+                case SplatRenderMode::GeometryShader: {
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, splat_geom_pipeline_);
+
+                    std::vector<VkBuffer> vbs = {splat_storage_.instance};
+                    std::vector<VkDeviceSize> vb_offsets = {0};
+                    vkCmdBindVertexBuffers(cb, 0, vbs.size(), vbs.data(), vb_offsets.data());
+
+                    vkCmdDrawIndirect(cb, splat_draw_indirect_, sizeof(float) * 8, 1, 0);
+                } break;
+            }
+        }
+
+        vkCmdEndRenderPass(cb);
+    }
 
     void createFramebuffer() {
         color_attachment_ =
@@ -1814,7 +1938,24 @@ class Engine::Impl {
             depth_attachment_.image_spec(),
         };
 
+        color_attachment_second_camera_ =
+            vk::Attachment(context_, width_, height_, VK_FORMAT_B8G8R8A8_UNORM, samples_, false);
+        depth_attachment_second_camera_ =
+            vk::Attachment(context_, width_, height_, depth_format_, samples_, false);
+
         framebuffer_ = vk::Framebuffer(context_, framebuffer_info);
+
+        vk::FramebufferCreateInfo framebuffer_info_second_camera_;
+        framebuffer_info_second_camera_.width = width_;
+        framebuffer_info_second_camera_.height = height_;
+        framebuffer_info_second_camera_.render_pass = render_pass_second_camera_;
+
+        framebuffer_info_second_camera_.image_specs = {
+            color_attachment_second_camera_.image_spec(),
+            depth_attachment_second_camera_.image_spec(),
+        };
+
+        framebuffer_second_camera_ = vk::Framebuffer(context_, framebuffer_info_second_camera_);
     }
 
     std::atomic_bool terminate_ = false;
@@ -1844,6 +1985,7 @@ class Engine::Impl {
     std::vector<VkFence> render_finished_fences_;
 
     vk::DescriptorLayout camera_descriptor_layout_;
+    vk::DescriptorLayout second_camera_descriptor_layout_;
     vk::DescriptorLayout gaussian_descriptor_layout_;
     vk::DescriptorLayout instance_layout_;
     vk::DescriptorLayout ply_descriptor_layout_;
@@ -1862,8 +2004,8 @@ class Engine::Impl {
     // normal pass
     vk::Framebuffer framebuffer_;
     vk::RenderPass render_pass_;
-    // VkRenderPass imgui_render_pass_;
-    // VkFramebuffer imgui_framebuffer_;
+    vk::Framebuffer framebuffer_second_camera_;
+    vk::RenderPass render_pass_second_camera_;
 
     vk::GraphicsPipeline color_line_pipeline_;
     vk::GraphicsPipeline splat_pipeline_;
@@ -1871,8 +2013,11 @@ class Engine::Impl {
 
     vk::Attachment color_attachment_;
     vk::Attachment depth_attachment_;
+    vk::Attachment color_attachment_second_camera_;
+    vk::Attachment depth_attachment_second_camera_;
 
     vk::UniformBuffer<vk::shader::Camera> camera_buffer_;
+    vk::UniformBuffer<vk::shader::Camera> camera_buffer_second_camera_;
 
     struct ColorObject {
         vk::Buffer position_buffer;
@@ -1885,6 +2030,7 @@ class Engine::Impl {
 
     struct FrameDescriptor {
         vk::Descriptor camera;
+        vk::Descriptor second_camera;
         vk::Descriptor gaussian;
         vk::Descriptor splat_instance;
         vk::Descriptor ply;

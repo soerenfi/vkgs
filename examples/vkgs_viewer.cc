@@ -27,6 +27,7 @@ int main(int argc, char** argv) {
       auto trajectory_path = parser.get<std::string>("trajectory");
       engine.LoadTrajectory(trajectory_path);
     }
+    // engine.addCamera();
     engine.Run();
   } catch (const std::exception& e) {
     std::cerr << e.what() << std::endl;

@@ -56,6 +56,8 @@
 #include "generated/splat_geom_geom.h"
 #include "generated/color_vert.h"
 #include "generated/color_frag.h"
+#include "generated/sky_vert.h"
+#include "generated/sky_frag.h"
 
 namespace vkgs {
 namespace {
@@ -416,6 +418,31 @@ class Engine::Impl {
             pipeline_info.samples = samples_;
             color_line_pipeline_ = vk::GraphicsPipeline(context_, pipeline_info);
         }
+        {
+            // Sky shader pipeline creation
+            VkPipelineColorBlendAttachmentState color_blend_attachment = {};
+            color_blend_attachment.colorWriteMask =
+                VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                VK_COLOR_COMPONENT_A_BIT;
+            color_blend_attachment.blendEnable = VK_FALSE;
+
+            std::vector<VkPipelineColorBlendAttachmentState> color_blend_attachments = {
+                color_blend_attachment};
+
+            // // Sky shader pipeline
+            vk::GraphicsPipelineCreateInfo sky_pipeline_info = {};
+            sky_pipeline_info.layout = graphics_pipeline_layout_;
+            sky_pipeline_info.vertex_shader = sky_vert;
+            sky_pipeline_info.fragment_shader = sky_frag;
+            sky_pipeline_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            sky_pipeline_info.depth_test = false;
+            sky_pipeline_info.depth_write = false;
+            sky_pipeline_info.color_blend_attachments = std::move(color_blend_attachments);
+
+            sky_pipeline_info.render_pass = render_pass_;
+            sky_pipeline_info.samples = samples_;
+            sky_pipeline_ = vk::GraphicsPipeline(context_, sky_pipeline_info);
+        }
 
         // uniforms and descriptors
         camera_buffer_ = vk::UniformBuffer<vk::shader::Camera>(context_, 2);
@@ -559,6 +586,11 @@ class Engine::Impl {
         for (auto query_pool : timestamp_query_pools_)
             vkDestroyQueryPool(context_.device(), query_pool, NULL);
         // ImGui::DestroyContext();
+
+        vkFreeCommandBuffers(context_.device(), context_.command_pool(),
+                             static_cast<uint32_t>(draw_command_buffers_.size()),
+                             draw_command_buffers_.data());
+        draw_command_buffers_.clear();
 
         glfwTerminate();
     }
@@ -1425,7 +1457,7 @@ class Engine::Impl {
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &cb;
         submit_info.signalSemaphoreCount = 0;
-        submit_info.pSignalSemaphores = NULL;  //&render_finished_semaphore;
+        submit_info.pSignalSemaphores = NULL;  //&render_finished_semaphores_[0];
         vkQueueSubmit(context_.graphics_queue(), 1, &submit_info, render_finished_fence);
 
         // VkSwapchainKHR swapchain_handle = swapchain_;
@@ -1437,10 +1469,10 @@ class Engine::Impl {
         // present_info.pImageIndices = &image_index;
         // frame_info.present_timestamp = Clock::timestamp();
         // vkQueuePresentKHR(context_.graphics_queue(), &present_info);
-        frame_info.present_done_timestamp = Clock::timestamp();
+        // frame_info.present_done_timestamp = Clock::timestamp();
 
         frame_counter_++;
-        vkQueueWaitIdle(context_.graphics_queue());
+        // vkQueueWaitIdle(context_.graphics_queue());
     }
 
     void UiFrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data) {
@@ -1663,7 +1695,7 @@ class Engine::Impl {
 
         ImGui::Render();
         ImDrawData* draw_data = ImGui::GetDrawData();
-        ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+        ImVec4 clear_color = ImVec4(0.1f, 0.1f, 0.1f, 1.00f);
         const bool is_minimized =
             (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f);
         if (!is_minimized) {
@@ -1682,11 +1714,17 @@ class Engine::Impl {
             throw std::runtime_error("target_image_view is null!");
         }
         std::vector<VkClearValue> clear_values(2);
+        std::vector<VkClearValue> clear_values_skyblue(2);
         clear_values[0].color.float32[0] = 0.0f;
         clear_values[0].color.float32[1] = 0.0f;
         clear_values[0].color.float32[2] = 0.0f;
         clear_values[0].color.float32[3] = 1.f;
-        clear_values[1].depthStencil.depth = 1.f;
+        clear_values[1].depthStencil = {1.0f, 0};  // Clear depth buffer
+        clear_values_skyblue[0].color.float32[0] = 0.5f;
+        clear_values_skyblue[0].color.float32[1] = 0.7f;
+        clear_values_skyblue[0].color.float32[2] = 1.0f;
+        clear_values_skyblue[0].color.float32[3] = 1.f;
+        clear_values_skyblue[1].depthStencil = {1.0f, 0};  // Clear depth buffer
 
         std::vector<VkImageView> render_pass_attachments;
 
@@ -1710,8 +1748,8 @@ class Engine::Impl {
         render_pass_begin_info.framebuffer = framebuffer_;
         render_pass_begin_info.renderArea.offset = {0, 0};
         render_pass_begin_info.renderArea.extent = {width, height};
-        render_pass_begin_info.clearValueCount = clear_values.size();
-        render_pass_begin_info.pClearValues = clear_values.data();
+        render_pass_begin_info.clearValueCount = clear_values_skyblue.size();
+        render_pass_begin_info.pClearValues = clear_values_skyblue.data();
         render_pass_begin_info.renderPass = render_pass_;
         render_pass_attachments_info.attachmentCount = render_pass_attachments.size();
         render_pass_attachments_info.pAttachments = render_pass_attachments.data();
@@ -1738,6 +1776,13 @@ class Engine::Impl {
         };
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_layout_, 0,
                                 descriptors.size(), descriptors.data(), 0, nullptr);
+
+        if (draw_sky) {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, sky_pipeline_);
+
+            // Draw the sky (assuming a full-screen quad)
+            vkCmdDraw(cb, 6, 1, 0, 0);
+        }
 
         // draw axis and grid
         {
@@ -1827,7 +1872,7 @@ class Engine::Impl {
 
     VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
     VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
-    SplatRenderMode splat_render_mode_ = SplatRenderMode::TriangleList;
+    SplatRenderMode splat_render_mode_ = SplatRenderMode::GeometryShader;
 
     Camera camera_;
 
@@ -1866,6 +1911,7 @@ class Engine::Impl {
     vk::GraphicsPipeline color_line_pipeline_;
     vk::GraphicsPipeline splat_pipeline_;
     vk::GraphicsPipeline splat_geom_pipeline_;
+    vk::GraphicsPipeline sky_pipeline_;
 
     vk::Attachment color_attachment_;
     vk::Attachment depth_attachment_;
@@ -1937,6 +1983,7 @@ class Engine::Impl {
     bool show_grid_ = true;
     bool follow_trajectory_ = false;
     bool drive_ = false;
+    bool draw_sky = false;
 
     vk::CpuBuffer visible_point_count_cpu_buffer_;  // (2) for debug
 

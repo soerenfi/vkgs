@@ -96,6 +96,9 @@ add_shader(vkgs src/shader/splat.vert splat_vert)
 add_shader(vkgs src/shader/splat.frag splat_frag)
 add_shader(vkgs src/shader/splat_geom.vert splat_geom_vert)
 add_shader(vkgs src/shader/splat_geom.geom splat_geom_geom)
+add_shader(vkgs src/shader/sky.vert sky_vert)
+add_shader(vkgs src/shader/sky.frag sky_frag)
+
 
 # executable
 add_executable(vkgs_viewer examples/vkgs_viewer.cc)

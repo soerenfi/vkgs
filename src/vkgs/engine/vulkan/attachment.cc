@@ -10,8 +10,8 @@ namespace vk {
 
 class Attachment::Impl {
    public:
-    Impl(Context context, uint32_t width, uint32_t height, VkFormat format, VkSampleCountFlagBits samples,
-         bool input_attachment)
+    Impl(Context context, uint32_t width, uint32_t height, VkFormat format,
+         VkSampleCountFlagBits samples, bool input_attachment)
         : context_(context), width_(width), height_(height), format_(format) {
         usage_ = 0;
         VkImageAspectFlags aspect = 0;
@@ -21,13 +21,13 @@ class Attachment::Impl {
             case VK_FORMAT_D16_UNORM_S8_UINT:
             case VK_FORMAT_D24_UNORM_S8_UINT:
             case VK_FORMAT_D32_SFLOAT_S8_UINT:
-                usage_ = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+                usage_ = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
                 aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
                 break;
 
             default:
-                usage_ = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                usage_ = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                // |VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
                 aspect = VK_IMAGE_ASPECT_COLOR_BIT;
                 break;
         }
@@ -89,12 +89,13 @@ class Attachment::Impl {
         layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         layout_binding.pImmutableSamplers = nullptr;
 
-        VkDescriptorSetLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        VkDescriptorSetLayoutCreateInfo layout_info = {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         layout_info.bindingCount = 1;
         layout_info.pBindings = &layout_binding;
 
-        if (vkCreateDescriptorSetLayout(context_.device(), &layout_info, nullptr, &descriptor_set_layout_) !=
-            VK_SUCCESS) {
+        if (vkCreateDescriptorSetLayout(context_.device(), &layout_info, nullptr,
+                                        &descriptor_set_layout_) != VK_SUCCESS) {
             throw std::runtime_error("failed to create descriptor set layout!");
         }
 
@@ -108,17 +109,20 @@ class Attachment::Impl {
         pool_info.pPoolSizes = &pool_size;
         pool_info.maxSets = 1;
 
-        if (vkCreateDescriptorPool(context_.device(), &pool_info, nullptr, &descriptor_pool_) != VK_SUCCESS) {
+        if (vkCreateDescriptorPool(context_.device(), &pool_info, nullptr, &descriptor_pool_) !=
+            VK_SUCCESS) {
             throw std::runtime_error("failed to create descriptor pool!");
         }
 
         // Allocate descriptor set
-        VkDescriptorSetAllocateInfo descriptor_alloc_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        VkDescriptorSetAllocateInfo descriptor_alloc_info = {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         descriptor_alloc_info.descriptorPool = descriptor_pool_;
         descriptor_alloc_info.descriptorSetCount = 1;
         descriptor_alloc_info.pSetLayouts = &descriptor_set_layout_;
 
-        if (vkAllocateDescriptorSets(context_.device(), &descriptor_alloc_info, &descriptor_set_) != VK_SUCCESS) {
+        if (vkAllocateDescriptorSets(context_.device(), &descriptor_alloc_info, &descriptor_set_) !=
+            VK_SUCCESS) {
             throw std::runtime_error("failed to allocate descriptor set!");
         }
 
@@ -170,8 +174,8 @@ class Attachment::Impl {
 
 Attachment::Attachment() = default;
 
-Attachment::Attachment(Context context, uint32_t width, uint32_t height, VkFormat format, VkSampleCountFlagBits samples,
-                       bool input_attachment)
+Attachment::Attachment(Context context, uint32_t width, uint32_t height, VkFormat format,
+                       VkSampleCountFlagBits samples, bool input_attachment)
     : impl_(std::make_shared<Impl>(context, width, height, format, samples, input_attachment)) {}
 
 Attachment::~Attachment() = default;

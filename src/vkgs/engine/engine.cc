@@ -864,7 +864,7 @@ class Engine::Impl {
             //   camera_.SetPosition(position);
             //   camera_.SetOrientation(orientation);
 
-            RenderFrame();
+            RenderCamera();
             RenderUI();
 
             // Present();
@@ -1045,15 +1045,7 @@ class Engine::Impl {
         transfer_timeline_++;
     }
 
-    void RenderFrame() {
-        // // recreate swapchain if need resize
-        // if (swapchain_.ShouldRecreate()) {
-        // vkWaitForFences(context_.device(), render_finished_fences_.size(),
-        //                 render_finished_fences_.data(), VK_TRUE, UINT64_MAX);
-        //   swapchain_.Recreate();
-        //   RecreateFramebuffer();
-        // }
-
+    void RenderCamera() {
         int32_t acquire_index = frame_counter_ % 3;
         int32_t frame_index = frame_counter_ % 2;
         // VkSemaphore image_acquired_semaphore =
@@ -1452,7 +1444,7 @@ class Engine::Impl {
         vkQueueWaitIdle(context_.graphics_queue());
     }
 
-    void FrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data) {
+    void UiFrameRender(ImGui_ImplVulkanH_Window* wd, ImDrawData* draw_data) {
         VkResult err;
 
         VkSemaphore image_acquired_semaphore =
@@ -1523,7 +1515,7 @@ class Engine::Impl {
         }
     }
 
-    void FramePresent(ImGui_ImplVulkanH_Window* wd) {
+    void UiFramePresent(ImGui_ImplVulkanH_Window* wd) {
         if (swapchain_rebuild_) return;
         VkSemaphore render_complete_semaphore =
             wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
@@ -1680,8 +1672,8 @@ class Engine::Impl {
             main_window_.ClearValue.color.float32[1] = clear_color.y * clear_color.w;
             main_window_.ClearValue.color.float32[2] = clear_color.z * clear_color.w;
             main_window_.ClearValue.color.float32[3] = clear_color.w;
-            FrameRender(&main_window_, draw_data);
-            FramePresent(&main_window_);
+            UiFrameRender(&main_window_, draw_data);
+            UiFramePresent(&main_window_);
         }
     }
 

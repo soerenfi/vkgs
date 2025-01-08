@@ -1568,25 +1568,25 @@ class Engine::Impl {
         ImGui::NewFrame();
 
         const auto& io = ImGui::GetIO();
-        if (!io.WantCaptureKeyboard) {
-            constexpr float speed = 1000.f;
-            float dt = io.DeltaTime;
-            if (ImGui::IsKeyDown(ImGuiKey_W)) {
-                camera_.Translate(0.f, 0.f, speed * dt);
-            }
-            if (ImGui::IsKeyDown(ImGuiKey_S)) {
-                camera_.Translate(0.f, 0.f, -speed * dt);
-            }
-            if (ImGui::IsKeyDown(ImGuiKey_A)) {
-                camera_.Translate(-speed * dt, 0.f);
-            }
-            if (ImGui::IsKeyDown(ImGuiKey_D)) {
-                camera_.Translate(speed * dt, 0.f);
-            }
-            if (ImGui::IsKeyDown(ImGuiKey_Space)) {
-                camera_.Translate(0.f, speed * dt);
-            }
+        constexpr float speed = 1000.f;
+        float dt = io.DeltaTime;
+
+        if (ImGui::IsKeyDown(ImGuiKey_W)) {
+            camera_.Translate(0.f, 0.f, speed * dt);
         }
+        if (ImGui::IsKeyDown(ImGuiKey_S)) {
+            camera_.Translate(0.f, 0.f, -speed * dt);
+        }
+        if (ImGui::IsKeyDown(ImGuiKey_A)) {
+            camera_.Translate(-speed * dt, 0.f);
+        }
+        if (ImGui::IsKeyDown(ImGuiKey_D)) {
+            camera_.Translate(speed * dt, 0.f);
+        }
+        if (ImGui::IsKeyDown(ImGuiKey_Space)) {
+            camera_.Translate(0.f, speed * dt);
+        }
+
         if (ImGui::BeginMainMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Add")) {
@@ -1622,10 +1622,12 @@ class Engine::Impl {
             // ImGui::DockSpace(dockspace_id);
 
             // ImGui::SetNextWindowDockID(dockspace_id, ImGuiCond_FirstUseEver);
-            ImGui::Begin("Viewport");
+            ImGui::Begin("Spectator");
 
-            // handle events
-            if (!io.WantCaptureMouse) {
+            // Check if the mouse is over this window:
+            bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup |
+                                                  ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            if (hovered) {
                 bool left = io.MouseDown[ImGuiMouseButton_Left];
                 bool right = io.MouseDown[ImGuiMouseButton_Right];
                 float dx = io.MouseDelta.x;

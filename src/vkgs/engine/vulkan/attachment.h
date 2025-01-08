@@ -14,24 +14,24 @@ namespace vk {
 class Context;
 
 class Attachment {
- public:
-  Attachment();
+   public:
+    Attachment();
 
-  Attachment(Context context, uint32_t width, uint32_t height, VkFormat format,
-             VkSampleCountFlagBits samples, bool input_attachment);
+    Attachment(Context context, uint32_t width, uint32_t height, VkFormat format, VkSampleCountFlagBits samples,
+               bool input_attachment);
 
-  ~Attachment();
+    ~Attachment();
 
-  operator VkImageView() const;
+    operator VkImageView() const;
+    VkDescriptorSet getDescriptorSet() const;
+    VkImage image() const;
+    VkImageUsageFlags usage() const;
+    VkFormat format() const;
+    ImageSpec image_spec() const;
 
-  VkImage image() const;
-  VkImageUsageFlags usage() const;
-  VkFormat format() const;
-  ImageSpec image_spec() const;
-
- private:
-  class Impl;
-  std::shared_ptr<Impl> impl_;
+   private:
+    class Impl;
+    std::shared_ptr<Impl> impl_;
 };
 
 }  // namespace vk

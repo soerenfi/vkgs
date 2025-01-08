@@ -1673,24 +1673,23 @@ class Engine::Impl {
   }
 
   void RenderUI() {
-    // Resize swap chain?
-    // int fb_width, fb_height;
-    // glfwGetFramebufferSize(window, &fb_width, &fb_height);
-    // if (fb_width > 0 && fb_height > 0 &&
-    //     (g_SwapChainRebuild || g_MainWindowData.Width != fb_width ||
-    //      g_MainWindowData.Height != fb_height)) {
-    //   ImGui_ImplVulkan_SetMinImageCount(g_MinImageCount);
-    //   ImGui_ImplVulkanH_CreateOrResizeWindow(
-    //       g_Instance, g_PhysicalDevice, g_Device, &g_MainWindowData,
-    //       g_QueueFamily, g_Allocator, fb_width, fb_height,
-    //       g_MinImageCount);
-    //   g_MainWindowData.FrameIndex = 0;
-    //   g_SwapChainRebuild = false;
-    // }
-    // if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0) {
-    //   ImGui_ImplGlfw_Sleep(10);
-    //   continue;
-    // }
+    int fb_width, fb_height;
+    glfwGetFramebufferSize(window_, &fb_width, &fb_height);
+    if (fb_width > 0 && fb_height > 0 &&
+        (swapchain_rebuild_ || main_window_.Width != fb_width ||
+         main_window_.Height != fb_height)) {
+      ImGui_ImplVulkan_SetMinImageCount(3);
+      ImGui_ImplVulkanH_CreateOrResizeWindow(
+          context_.instance(), context_.physical_device(), context_.device(),
+          &main_window_, context_.graphics_queue_family_index(), NULL, width_,
+          height_, 3);
+      main_window_.FrameIndex = 0;
+      swapchain_rebuild_ = false;
+    }
+    if (glfwGetWindowAttrib(window_, GLFW_ICONIFIED) != 0) {
+      ImGui_ImplGlfw_Sleep(10);
+      return;
+    }
 
     // Start the Dear ImGui frame
     ImGui_ImplVulkan_NewFrame();
@@ -1746,8 +1745,8 @@ class Engine::Impl {
       ImGui::Text("This is some useful text.");  // Display some text (you can
                                                  // use a format strings too)
 
-      // ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f /
-      // io.Framerate, io.Framerate);
+      ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+                  1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
       ImGui::End();
     }
     {

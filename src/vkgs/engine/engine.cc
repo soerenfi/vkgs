@@ -27,8 +27,7 @@
 
 #include <vk_radix_sort.h>
 
-#include <vkgs/scene/spectator_camera.h>
-#include <vkgs/scene/camera_sensor.h>
+#include <vkgs/scene/camera.h>
 #include <vkgs/util/clock.h>
 
 #include "vkgs/engine/splat_load_thread.h"
@@ -1830,8 +1829,7 @@ class Engine::Impl {
     VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
     SplatRenderMode splat_render_mode_ = SplatRenderMode::TriangleList;
 
-    SpectatorCamera camera_;
-    CameraSensor camera_sensor_;
+    Camera camera_;
 
     ImGui_ImplVulkanH_Window main_window_;
     bool swapchain_rebuild_ = false;
